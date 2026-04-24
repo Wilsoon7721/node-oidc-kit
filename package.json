@@ -1,8 +1,7 @@
 {
-  "name": "wilsoonid-monorepo",
-  "version": "0.0.0",
+  "name": "wilsoonid-sdk",
   "private": true,
-  "packageManager": "npm@11.7.0",
+  "packageManager": "npm@10.8.2",
   "workspaces": [
     "packages/*"
   ],
@@ -11,11 +10,14 @@
     "dev": "turbo dev",
     "lint": "turbo lint",
     "test": "turbo test",
-    "clean": "turbo clean"
+    "clean": "turbo clean && rimraf node_modules packages/*/node_modules packages/*/dist"
   },
   "devDependencies": {
-    "turbo": "latest",
+    "@types/node": "^25.6.0",
+    "eslint": "^8.0.0",
     "prettier": "^3.0.0",
+    "rimraf": "^5.0.0",
+    "turbo": "latest",
     "typescript": "^5.0.0"
   }
 }

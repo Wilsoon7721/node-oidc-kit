@@ -1,13 +1,6 @@
-import { WilsoonID } from '@wilsoon/auth-core';
-import { useEffect, useState } from 'react';
+import { AuthCore } from '@wilsoon/auth-core';
 
-export const useWilsoonAuth = (apiKey: string) => {
-  const [sdk, setSdk] = useState<WilsoonID | null>(null);
-
-  useEffect(() => {
-    const instance = new WilsoonID(apiKey);
-    setSdk(instance);
-  }, [apiKey]);
-
-  return { sdk };
+export const AuthProvider = () => {
+  const core = new AuthCore();
+  return "AuthProvider logic using core";
 };

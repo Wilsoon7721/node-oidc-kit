@@ -1,12 +1,6 @@
-import { WilsoonID } from '@wilsoon/auth-core';
+import { AuthCore } from '@wilsoon/auth-core';
 
-export const createNextAuth = (apiKey: string) => {
-  const sdk = new WilsoonID(apiKey);
-  
-  return {
-    middleware: () => {
-      console.log('Next.js Middleware logic with WilsoonID');
-    },
-    sdk
-  };
+export const handleAuth = () => {
+  const core = new AuthCore();
+  return "Next.js Auth Handler using core";
 };

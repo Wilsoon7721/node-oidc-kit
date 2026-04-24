@@ -8,6 +8,5 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   minify: true,
-  outDir: 'dist',
-  external: ['react', 'react-dom', '@wilsoon/auth-core'],
+  external: ['react'],
 });

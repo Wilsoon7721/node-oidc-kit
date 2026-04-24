@@ -8,5 +8,4 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   minify: true,
-  outDir: 'dist',
 });
