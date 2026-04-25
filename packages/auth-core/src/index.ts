@@ -1,3 +1,5 @@
+import { AuthError, DiscoveryError, LogoutError, NoTokenError, StateMismatchError, TokenExchangeError, TokenRefreshError, UserInfoError } from "./errors";
+import { AuthStorage, BrowserStorage } from "./storage";
 import { AuthConfig, DiscoveryDocument, TokenResponse, User } from "./types";
 import { generatePKCE, generateState } from "./utils";
 
@@ -6,19 +8,59 @@ import { generatePKCE, generateState } from "./utils";
  * Provides methods for OIDC discovery, authorization URL generation,
  * token exchange, and user profile management.
  */
+
+const TOKEN_KEY = 'wilsoon_id_tokens';
+
+const decodeBase64 = (str: string) => {
+  if (typeof atob === 'function') return atob(str);
+  return Buffer.from(str, 'base64').toString('binary');
+};
+
 export class AuthClient {
   private discoveryCache: DiscoveryDocument | null = null;
+  private storage: AuthStorage;
 
   /**
    * Initializes a new instance of the AuthClient.
    * @param config The configuration object containing client credentials and issuer details.
+   * @param storage An optional custom storage implementation. Defaults to browser session storage.
    */
-  constructor(private config: AuthConfig) { }
+  constructor(private config: AuthConfig, storage?: AuthStorage) {
+    this.storage = storage || new BrowserStorage();
+  }
+
+  /**
+   * Persists the OIDC token response to the configured storage.
+   * @param tokens The token response object to save.
+   */
+  public saveTokens(tokens: TokenResponse): void {
+    this.storage.setItem(TOKEN_KEY, JSON.stringify(tokens));
+  }
+
+  /**
+   * Retrieves the persisted OIDC token response from storage.
+   * @returns The stored TokenResponse or null if none is found.
+   */
+  public getStoredTokens(): TokenResponse | null {
+    const raw = this.storage.getItem(TOKEN_KEY);
+    return raw ? JSON.parse(raw) : null;
+  }
+
+  /**
+   * Clears all authentication-related data from the configured storage.
+   * This includes tokens, security state, and PKCE verifiers.
+   */
+  public clearStorage(): void {
+    this.storage.removeItem(TOKEN_KEY);
+    this.storage.removeItem('wilsoon_auth_state');
+    this.storage.removeItem('wilsoon_auth_verifier');
+  }
 
   /**
    * Retrieves the OIDC discovery document from the identity provider.
    * Results are cached internally after the first successful request.
    * @returns A promise that resolves to the OIDC Discovery Document.
+   * @throws {DiscoveryError} If the discovery document cannot be fetched.
    * @private
    */
   private async getEndpoints(): Promise<DiscoveryDocument> {
@@ -28,7 +70,7 @@ export class AuthClient {
     const response = await fetch(discoveryUrl);
 
     if (!response.ok) {
-      throw new Error(`Failed to discover OIDC endpoints at ${discoveryUrl}`);
+      throw new DiscoveryError(discoveryUrl);
     }
 
     this.discoveryCache = await response.json();
@@ -54,6 +96,7 @@ export class AuthClient {
   /**
    * Generates a PKCE-compliant authorization URL to initiate the user login flow.
    * @returns A promise resolving to the authorization URL and security tokens (state/verifier).
+   * @throws {DiscoveryError} If the OIDC discovery process fails.
    */
   public async createAuthorizeUrl() {
     const { codeVerifier, codeChallenge } = await generatePKCE();
@@ -77,6 +120,8 @@ export class AuthClient {
    * @param code The authorization code received from the callback redirect.
    * @param codeVerifier The PKCE code verifier used when generating the initial authorize URL.
    * @returns A promise that resolves to the full OIDC Token Response.
+   * @throws {TokenExchangeError} If the code exchange fails.
+   * @throws {DiscoveryError} If the OIDC discovery process fails.
    */
   public async exchangeCodeForToken(code: string, codeVerifier: string): Promise<TokenResponse> {
     const params = new URLSearchParams({
@@ -94,7 +139,7 @@ export class AuthClient {
       body: params,
     });
 
-    if (!response.ok) throw new Error('Failed to exchange code for token');
+    if (!response.ok) throw new TokenExchangeError();
 
     return response.json();
   }
@@ -103,6 +148,8 @@ export class AuthClient {
    * Fetches the user's profile information using an active access token.
    * @param accessToken A valid OIDC access token.
    * @returns A promise that resolves to the standardized User object.
+   * @throws {UserInfoError} If the user information cannot be retrieved.
+   * @throws {DiscoveryError} If the OIDC discovery process fails.
    */
   public async getUser(accessToken: string): Promise<User> {
     const { userinfo_endpoint } = await this.getEndpoints();
@@ -110,7 +157,7 @@ export class AuthClient {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
-    if (!response.ok) throw new Error('Failed to fetch user info');
+    if (!response.ok) throw new UserInfoError();
 
     const raw = await response.json();
     return this.mapUser(raw);
@@ -120,12 +167,14 @@ export class AuthClient {
    * Generates the standardized logout URL for the Wilsoon Identity platform.
    * @param idToken The user's ID Token from their session.
    * @param postLogoutRedirectUri Where the user should be sent after logout.
+   * @returns A promise that resolves to the generated logout URL.
+   * @throws {LogoutError} If the logout URL cannot be generated.
+   * @throws {DiscoveryError} If the OIDC discovery process fails.
    */
   public async getLogoutUrl(idToken: string, postLogoutRedirectUri: string): Promise<string> {
     const { end_session_endpoint } = await this.getEndpoints();
-    if (!end_session_endpoint) {
-      throw new Error('OIDC discovery document does not specify an end_session_endpoint.');
-    }
+    if (!end_session_endpoint)
+      throw new LogoutError();
 
     const url = new URL(end_session_endpoint);
     url.searchParams.set('id_token_hint', idToken);
@@ -138,6 +187,8 @@ export class AuthClient {
    * Requests a new access token using a valid refresh token.
    * @param refreshToken The refresh token obtained from a previous token exchange.
    * @returns A promise that resolves to a new Token Response.
+   * @throws {TokenRefreshError} If the token refresh fails.
+   * @throws {DiscoveryError} If the OIDC discovery process fails.
    */
   public async refreshAccessToken(refreshToken: string): Promise<TokenResponse> {
     const params = new URLSearchParams({
@@ -153,7 +204,7 @@ export class AuthClient {
       body: params,
     });
 
-    if (!response.ok) throw new Error('Failed to refresh access token');
+    if (!response.ok) throw new TokenRefreshError();
 
     return response.json();
   }
@@ -163,17 +214,18 @@ export class AuthClient {
    * This is isomorphic and works in both Client and Server environments.
    * @param idToken The ID token obtained from a previous token exchange.
    * @returns The standardized User object.
+   * @throws {NoTokenError} If the ID token is invalid or cannot be parsed.
    */
   public parseIdToken(idToken: string): User {
     try {
       const base64Url = idToken.split('.')[1];
       const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      const jsonPayload = decodeURIComponent(atob(base64).split('').map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+      const jsonPayload = decodeURIComponent(decodeBase64(base64).split('').map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
 
       const raw = JSON.parse(jsonPayload);
       return this.mapUser(raw);
     } catch (error) {
-      throw new Error('Failed to parse ID token');
+      throw new NoTokenError('Failed to parse ID token');
     }
   }
 
@@ -182,11 +234,11 @@ export class AuthClient {
    * This prevents CSRF attacks.
    * @param returnedState The state returned from the IdP.
    * @param storedState The state stored in the application.
-   * @returns A boolean indicating whether the states match.
+   * @throws {StateMismatchError} If the states do not match, indicating a potential CSRF attack.
    */
-  public validateState(returnedState: string, storedState: string): boolean {
-    if (!returnedState || !storedState) return false;
-    return returnedState === storedState;
+  public validateState(returnedState: string, storedState: string): void {
+    if (!returnedState || !storedState || returnedState !== storedState)
+      throw new StateMismatchError();
   }
 
   /**
@@ -198,7 +250,7 @@ export class AuthClient {
     try {
       const base64Url = token.split('.')[1];
       const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      const payload = JSON.parse(atob(base64));
+      const payload = JSON.parse(decodeBase64(base64));
 
       if (!payload.exp) return false;
 
@@ -209,3 +261,7 @@ export class AuthClient {
     }
   }
 }
+
+export * from './types';
+export * from './errors';
+export * from './utils';
