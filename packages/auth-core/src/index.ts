@@ -26,7 +26,7 @@ export class AuthClient {
    * @param storage An optional custom storage implementation. Defaults to browser session storage.
    */
   constructor(private config: AuthConfig, storage?: AuthStorage) {
-    this.storage = storage || new BrowserStorage();
+    this.storage = storage || (typeof window !== 'undefined' ? new BrowserStorage() : {} as AuthStorage);
   }
 
   /**
@@ -263,5 +263,7 @@ export class AuthClient {
 }
 
 export * from './types';
+export * from './storage';
+export * from './storage/CookieStorage';
 export * from './errors';
 export * from './utils';

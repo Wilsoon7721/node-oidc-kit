@@ -2,7 +2,13 @@ const toHex = (buf: Uint8Array) => Array.from(buf).map(b => b.toString(16).padSt
 
 const toBase64Url = (buf: Uint8Array) => {
     const binary = String.fromCharCode(...buf);
-    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    let base64;
+    if (typeof btoa === 'function') {
+        base64 = btoa(binary);
+    } else {
+        base64 = Buffer.from(binary, 'binary').toString('base64');
+    }
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 };
 
 /**
@@ -13,7 +19,14 @@ const toBase64Url = (buf: Uint8Array) => {
  */
 export function generateRandomString(length: number): string {
     const array = new Uint8Array(Math.ceil(length / 2));
-    globalThis.crypto.getRandomValues(array);
+    if (globalThis.crypto && globalThis.crypto.getRandomValues) {
+        globalThis.crypto.getRandomValues(array);
+    } else {
+        // Fallback for Node.js environments without global crypto
+        const crypto = require('crypto');
+        const buf = crypto.randomBytes(array.length);
+        array.set(buf);
+    }
     return toHex(array).slice(0, length);
 }
 
@@ -32,7 +45,13 @@ export function generateState(): string {
  */
 export function generateCodeVerifier(): string {
     const array = new Uint8Array(96);
-    globalThis.crypto.getRandomValues(array);
+    if (globalThis.crypto && globalThis.crypto.getRandomValues) {
+        globalThis.crypto.getRandomValues(array);
+    } else {
+        const crypto = require('crypto');
+        const buf = crypto.randomBytes(array.length);
+        array.set(buf);
+    }
     return toBase64Url(array).slice(0, 128);
 }
 
@@ -42,11 +61,16 @@ export function generateCodeVerifier(): string {
  * @returns A promise resolving to the base64url-encoded SHA-256 hash.
  */
 export async function generateCodeChallenge(codeVerifier: string): Promise<string> {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(codeVerifier);
-    const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', data);
-
-    return toBase64Url(new Uint8Array(hashBuffer));
+    if (globalThis.crypto && globalThis.crypto.subtle) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(codeVerifier);
+        const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', data);
+        return toBase64Url(new Uint8Array(hashBuffer));
+    } else {
+        const crypto = require('crypto');
+        const hash = crypto.createHash('sha256').update(codeVerifier).digest();
+        return toBase64Url(new Uint8Array(hash));
+    }
 }
 
 /**

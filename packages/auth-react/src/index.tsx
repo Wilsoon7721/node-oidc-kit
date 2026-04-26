@@ -1,11 +1,28 @@
+"use client";
+
 import React, { createContext, useContext, useEffect, useState, useMemo, useRef } from 'react';
-import { AuthClient, User, TokenResponse, NoTokenError } from '@wilsoon/auth-core';
+import { AuthClient, User, TokenResponse, NoTokenError, CookieStorage } from '@wilsoon/auth-core';
 import { AuthState } from './types';
 
 const AuthContext = createContext<AuthState | null>(null);
 
-export const AuthProvider: React.FC<{ clientId: string; issuer: string; redirectUri: string; children: React.ReactNode; }> = ({ clientId, issuer, redirectUri, children }) => {
-  const client = useMemo(() => new AuthClient({ clientId, issuer, redirectUri }), [clientId, issuer, redirectUri]);
+/**
+ * Provider component that handles authentication state for the application.
+ * It manages token exchange, storage, and auto-refresh.
+ * 
+ * @param props.clientId The OAuth2 client ID.
+ * @param props.issuer The OIDC issuer URL.
+ * @param props.redirectUri The callback URI after login.
+ * @param props.cookieDomain Optional domain for the auth cookie.
+ * @param props.children React children.
+ */
+export const AuthProvider: React.FC<{ clientId: string; issuer: string; redirectUri: string; cookieDomain?: string; children: React.ReactNode; }> = ({ clientId, issuer, redirectUri, cookieDomain, children }) => {
+  const config = useMemo(() => ({ clientId, issuer, redirectUri, cookieDomain }), [clientId, issuer, redirectUri, cookieDomain]);
+
+  const client = useMemo(() => {
+    const storage = new CookieStorage(config.cookieDomain);
+    return new AuthClient(config, storage);
+  }, [config]);
 
   const [user, setUser] = useState<User | null>(null);
   const [tokens, setTokens] = useState<TokenResponse | null>(null);
@@ -79,7 +96,7 @@ export const AuthProvider: React.FC<{ clientId: string; issuer: string; redirect
 
     const interval = setInterval(async () => {
       if (client.isTokenExpired(tokens.access_token)) {
-        if(!tokens?.refresh_token) return;
+        if (!tokens?.refresh_token) return;
         try {
           const refreshed = await client.refreshAccessToken(tokens.refresh_token);
           updateAuth(refreshed);
@@ -105,7 +122,7 @@ export const AuthProvider: React.FC<{ clientId: string; issuer: string; redirect
       setIsLoading(true);
       if (tokens?.id_token) {
         const logoutUrl = await client.getLogoutUrl(tokens.id_token, returnTo);
-        updateAuth(null); 
+        updateAuth(null);
         window.location.href = logoutUrl;
       } else {
         updateAuth(null);
@@ -122,6 +139,11 @@ export const AuthProvider: React.FC<{ clientId: string; issuer: string; redirect
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
+/**
+ * Hook to access the current authentication state and actions.
+ * @returns The authentication state (user, tokens, isAuthenticated, isLoading, error) and actions (login, logout).
+ * @throws Error if used outside of an AuthProvider.
+ */
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {

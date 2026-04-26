@@ -7,6 +7,8 @@ export interface AuthConfig {
     redirectUri: string;
     /* Optional list of scopes to request (defaults to ['openid', 'profile', 'email']). */
     scope?: string[];
+    /** Optional domain for setting cookies across subdomains. */
+    cookieDomain?: string;
 }
 
 /**

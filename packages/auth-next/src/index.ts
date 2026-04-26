@@ -1,6 +1,4 @@
-import { AuthCore } from '@wilsoon/auth-core';
+export * from '@wilsoon/auth-react';
+export { createAuthMiddleware } from './middleware';
 
-export const handleAuth = () => {
-  const core = new AuthCore();
-  return "Next.js Auth Handler using core";
-};
+export { getSession } from './server';
