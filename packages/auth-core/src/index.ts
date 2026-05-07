@@ -12,8 +12,11 @@ import { generatePKCE, generateState } from "./utils";
 const TOKEN_KEY = 'wilsoon_id_tokens';
 
 const decodeBase64 = (str: string) => {
-  if (typeof atob === 'function') return atob(str);
-  return Buffer.from(str, 'base64').toString('binary');
+  const padLength = (4 - (str.length % 4)) % 4;
+  const paddedStr = str + '='.repeat(padLength);
+
+  if (typeof atob === 'function') return atob(paddedStr);
+  return Buffer.from(paddedStr, 'base64').toString('binary');
 };
 
 export class AuthClient {
