@@ -87,13 +87,15 @@ export class AuthClient {
    * @private
    */
   private mapUser(raw: any): User {
+    const fields = raw.oidc_fields || raw;
+
     return {
-      id: raw.oidc_fields.id,
+      id: fields.id || raw.sub,
       email: raw.email,
       name: raw.name,
-      role: raw.oidc_fields.role,
+      role: fields.role,
       authMethods: raw.amr || [],
-      sessionVersion: raw.oidc_fields.session_version
+      sessionVersion: fields.session_version
     };
   }
 
