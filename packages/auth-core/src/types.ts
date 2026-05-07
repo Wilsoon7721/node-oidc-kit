@@ -59,6 +59,8 @@ export interface User {
     id: string;
     /** The user's primary email address. */
     email: string;
+    /** The user's name or friendly nickname. */
+    name?: string;
     /** The user's role within the platform. */
     role: 'admin' | 'user';
     /** List of authentication methods used during the session. */

@@ -1,6 +1,6 @@
 {
   "name": "@wilsoon/auth-next",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Next.js utilities for WilsoonID Auth",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",

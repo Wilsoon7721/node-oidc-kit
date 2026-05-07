@@ -87,6 +87,7 @@ export class AuthClient {
     return {
       id: raw.oidc_fields.id,
       email: raw.email,
+      name: raw.name,
       role: raw.oidc_fields.role,
       authMethods: raw.amr || [],
       sessionVersion: raw.oidc_fields.session_version
