@@ -133,6 +133,10 @@ export class AuthClient {
       code_verifier: codeVerifier,
     });
 
+    if (this.config.clientSecret) {
+      params.append('client_secret', this.config.clientSecret);
+    }
+
     const { token_endpoint } = await this.getEndpoints();
     const response = await fetch(token_endpoint, {
       method: 'POST',
@@ -197,6 +201,10 @@ export class AuthClient {
       client_id: this.config.clientId,
       refresh_token: refreshToken,
     });
+
+    if (this.config.clientSecret) {
+      params.append('client_secret', this.config.clientSecret);
+    }
 
     const { token_endpoint } = await this.getEndpoints();
     const response = await fetch(token_endpoint, {

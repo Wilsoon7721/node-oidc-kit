@@ -9,6 +9,8 @@ export interface AuthConfig {
     scope?: string[];
     /** Optional domain for setting cookies across subdomains. */
     cookieDomain?: string;
+    /** Optional client secret for confidential clients. */
+    clientSecret?: string;
 }
 
 /**
