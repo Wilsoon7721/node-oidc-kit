@@ -1,10 +1,7 @@
 {
   "name": "wilsoonid-sdk",
   "private": true,
-  "packageManager": "npm@10.8.2",
-  "workspaces": [
-    "packages/*"
-  ],
+  "packageManager": "pnpm@9.0.0", 
   "scripts": {
     "build": "turbo build",
     "dev": "turbo dev",
