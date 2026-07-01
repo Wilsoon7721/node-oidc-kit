@@ -1,14 +1,29 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState, useMemo, useRef } from 'react';
-import { AuthClient, User, TokenResponse, NoTokenError, CookieStorage } from '@wilsoon/auth-core';
+import { AuthClient, User, TokenResponse } from '@wilsoon/auth-core';
 import { AuthState } from './types';
 
 const AuthContext = createContext<AuthState | null>(null);
 
 /**
  * Provider component that handles authentication state for the application.
- * It manages token exchange, storage, and auto-refresh.
+ * It manages token exchange, session hydration via HttpOnly cookies, and logout.
+ *
+ * On page load, the provider hydrates authentication state by calling the
+ * identity provider's userinfo endpoint with `credentials: 'include'`.
+ * The browser automatically attaches the HttpOnly `wilsoon_id_tokens` cookie,
+ * and the server validates the token and returns user info.
+ * 
+ * **Token Refresh Strategies:**
+ * Because the `wilsoon_id_tokens` cookie is `HttpOnly`, this provider cannot proactively 
+ * refresh tokens on the client side. You must implement one of the following:
+ * 
+ * 1. **Pure React SPA (Reactive Refresh):** Set up a global Axios Interceptor or `fetch` 
+ *    wrapper that catches `401 Unauthorized` responses from your API, calls 
+ *    `client.refreshAccessToken()`, and retries the failed request.
+ * 2. **Next.js / SSR (Middleware):** Use `@wilsoon/auth-next` middleware to automatically 
+ *    intercept and refresh tokens server-side before they reach the client.
  * 
  * @param props.clientId The OAuth2 client ID.
  * @param props.issuer The OIDC issuer URL.
@@ -19,29 +34,13 @@ const AuthContext = createContext<AuthState | null>(null);
 export const AuthProvider: React.FC<{ clientId: string; issuer: string; redirectUri: string; cookieDomain?: string; children: React.ReactNode; }> = ({ clientId, issuer, redirectUri, cookieDomain, children }) => {
   const config = useMemo(() => ({ clientId, issuer, redirectUri, cookieDomain }), [clientId, issuer, redirectUri, cookieDomain]);
 
-  const client = useMemo(() => {
-    const storage = new CookieStorage(config.cookieDomain);
-    return new AuthClient(config, storage);
-  }, [config]);
+  const client = useMemo(() => new AuthClient(config), [config]);
 
   const [user, setUser] = useState<User | null>(null);
   const [tokens, setTokens] = useState<TokenResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const processingRef = useRef(false);
-
-  const updateAuth = (newTokens: TokenResponse | null) => {
-    if (newTokens) {
-      client.saveTokens(newTokens);
-      setTokens(newTokens);
-      if (!newTokens.id_token) throw new NoTokenError('No ID token received from server.');
-      setUser(client.parseIdToken(newTokens.id_token));
-    } else {
-      client.clearStorage();
-      setTokens(null);
-      setUser(null);
-    }
-  };
 
   useEffect(() => {
     const init = async () => {
@@ -54,35 +53,32 @@ export const AuthProvider: React.FC<{ clientId: string; issuer: string; redirect
 
       try {
         if (code && state) {
+          // OAuth callback: exchange code for tokens
           const savedState = window.sessionStorage.getItem('wilsoon_auth_state');
           const savedVerifier = window.sessionStorage.getItem('wilsoon_auth_verifier');
 
           client.validateState(state, savedState || '');
+
+          // Code Exchange
           const tokenRes = await client.exchangeCodeForToken(code, savedVerifier || '');
 
-          updateAuth(tokenRes);
+          setTokens(tokenRes);
+          if (tokenRes.id_token)
+            setUser(client.parseIdToken(tokenRes.id_token));
 
           window.sessionStorage.removeItem('wilsoon_auth_state');
           window.sessionStorage.removeItem('wilsoon_auth_verifier');
           window.history.replaceState({}, document.title, window.location.pathname);
         } else {
-          const stored = client.getStoredTokens();
-          if (stored) {
-            if (client.isTokenExpired(stored.access_token)) {
-              if (stored.refresh_token) {
-                const refreshed = await client.refreshAccessToken(stored.refresh_token);
-                updateAuth(refreshed);
-              } else {
-                updateAuth(null);
-              }
-            } else {
-              updateAuth(stored);
-            }
+          const hydratedUser = await client.hydrateSession();
+          if (hydratedUser) {
+            setUser(hydratedUser);
           }
         }
       } catch (err: any) {
         setError(err);
-        updateAuth(null);
+        setUser(null);
+        setTokens(null);
       } finally {
         setIsLoading(false);
       }
@@ -90,25 +86,6 @@ export const AuthProvider: React.FC<{ clientId: string; issuer: string; redirect
 
     init();
   }, [client]);
-
-  useEffect(() => {
-    if (!tokens?.refresh_token) return;
-
-    const interval = setInterval(async () => {
-      if (client.isTokenExpired(tokens.access_token)) {
-        if (!tokens?.refresh_token) return;
-        try {
-          const refreshed = await client.refreshAccessToken(tokens.refresh_token);
-          updateAuth(refreshed);
-        } catch (err) {
-          console.error("Auto-refresh failed:", err);
-          logout();
-        }
-      }
-    }, 30000);
-
-    return () => clearInterval(interval);
-  }, [tokens, client]);
 
   const login = async () => {
     const { url, state, codeVerifier } = await client.createAuthorizeUrl();
@@ -120,17 +97,27 @@ export const AuthProvider: React.FC<{ clientId: string; issuer: string; redirect
   const logout = async (returnTo = window.location.origin) => {
     try {
       setIsLoading(true);
+
       if (tokens?.id_token) {
+        // Build the logout URL with the id_token_hint so the server can
+        // verify the session and clear the HttpOnly cookie.
         const logoutUrl = await client.getLogoutUrl(tokens.id_token, returnTo);
-        updateAuth(null);
+        setUser(null);
+        setTokens(null);
         window.location.href = logoutUrl;
       } else {
-        updateAuth(null);
-        window.location.href = returnTo;
+        // No id_token available (e.g., hydrated session without token exchange).
+        // Redirect to the logout endpoint without the hint — the server
+        // will still clear the HttpOnly cookie via the session.
+        const logoutUrl = `${config.issuer}/api/logout?post_logout_redirect_uri=${encodeURIComponent(returnTo)}`;
+        setUser(null);
+        setTokens(null);
+        window.location.href = logoutUrl;
       }
     } catch (err) {
       console.error("Logout failed:", err);
-      updateAuth(null);
+      setUser(null);
+      setTokens(null);
       window.location.href = returnTo;
     }
   };

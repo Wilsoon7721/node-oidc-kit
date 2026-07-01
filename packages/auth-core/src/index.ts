@@ -147,6 +147,7 @@ export class AuthClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params,
+      credentials: 'include',
     });
 
     if (!response.ok) throw new TokenExchangeError();
@@ -165,12 +166,41 @@ export class AuthClient {
     const { userinfo_endpoint } = await this.getEndpoints();
     const response = await fetch(userinfo_endpoint, {
       headers: { Authorization: `Bearer ${accessToken}` },
+      credentials: 'include',
     });
 
     if (!response.ok) throw new UserInfoError();
 
     const raw = await response.json();
     return this.mapUser(raw);
+  }
+
+  /**
+   * Hydrates the current session by calling the userinfo endpoint with credentials.
+   * The browser automatically attaches the HttpOnly `wilsoon_id_tokens` cookie.
+   * The server reads the cookie, extracts and validates the access token,
+   * and returns the user profile.
+   *
+   * Use this method on page load to restore authentication state when tokens
+   * are stored in HttpOnly cookies and are invisible to JavaScript.
+   *
+   * @returns A promise that resolves to the User object, or null if no valid session exists.
+   * @throws {DiscoveryError} If the OIDC discovery process fails.
+   */
+  public async hydrateSession(): Promise<User | null> {
+    try {
+      const { userinfo_endpoint } = await this.getEndpoints();
+      const response = await fetch(userinfo_endpoint, {
+        credentials: 'include',
+      });
+
+      if (!response.ok) return null;
+
+      const raw = await response.json();
+      return this.mapUser(raw);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -216,6 +246,7 @@ export class AuthClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params,
+      credentials: 'include',
     });
 
     if (!response.ok) throw new TokenRefreshError();

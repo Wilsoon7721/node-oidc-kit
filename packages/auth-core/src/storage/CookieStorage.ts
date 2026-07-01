@@ -1,51 +1,56 @@
 import { AuthStorage } from '../storage';
 
 /**
- * Implementation of AuthStorage using browser cookies.
+ * @deprecated Since v1.2.0 — CookieStorage is deprecated.
+ *
+ * The `wilsoon_id_tokens` cookie is now set as `HttpOnly` by the server,
+ * making it invisible to `document.cookie`. All client-side read/write/remove
+ * operations are no-ops.
+ *
+ * **Migration**: Use `AuthClient.hydrateSession()` to load authentication state
+ * on page load. The server reads the HttpOnly cookie automatically when
+ * `credentials: 'include'` is set on fetch requests.
+ *
+ * For non-HttpOnly use cases (e.g., localStorage), use `BrowserStorage` instead.
  */
 export class CookieStorage implements AuthStorage {
-    constructor(private domain?: string) { }
+    private static _deprecationWarned = false;
+
+    constructor(private domain?: string) {
+        if (!CookieStorage._deprecationWarned) {
+            console.warn(
+                '[WilsoonID] CookieStorage is deprecated. ' +
+                'The auth cookie is now HttpOnly and managed server-side. ' +
+                'Use AuthClient.hydrateSession() to load session state on page load.'
+            );
+            CookieStorage._deprecationWarned = true;
+        }
+    }
 
     /**
-     * Gets a cookie value by key.
-     * @param key The cookie name.
-     * @returns The cookie value or null if not found or if running on server.
+     * @deprecated No-op. HttpOnly cookies cannot be read via `document.cookie`.
+     * Use `AuthClient.hydrateSession()` instead.
+     * @param _key The cookie name (unused).
+     * @returns Always returns null.
      */
-    getItem(key: string): string | null {
-        if (typeof window === 'undefined') return null;
-        const name = key + "=";
-        const ca = document.cookie.split(';');
-        for (let i = 0; i < ca.length; i++) {
-            let c = ca[i].trim();
-            if (c.indexOf(name) === 0) return c.substring(name.length, c.length);
-        }
+    getItem(_key: string): string | null {
         return null;
     }
 
     /**
-     * Sets a cookie with a 1-year expiration.
-     * @param key The cookie name.
-     * @param value The cookie value.
+     * @deprecated No-op. The auth cookie is set server-side by `/api/token` with the HttpOnly flag.
+     * @param _key The cookie name (unused).
+     * @param _value The cookie value (unused).
      */
-    setItem(key: string, value: string): void {
-        if (typeof window === 'undefined') return;
-
-        let cookieString = `${key}=${value}; path=/; max-age=31536000; SameSite=Lax; Secure`;
-
-        if (this.domain)
-            cookieString += `; domain=${this.domain}`;
-
-        document.cookie = cookieString;
+    setItem(_key: string, _value: string): void {
+        // No-op: cookie is set server-side by /api/token with HttpOnly flag.
     }
 
     /**
-     * Removes a cookie by setting its expiration to the past.
-     * @param key The cookie name.
+     * @deprecated No-op. The auth cookie is cleared server-side during logout via `/api/logout`.
+     * @param _key The cookie name (unused).
      */
-    removeItem(key: string): void {
-        if (typeof window === 'undefined') return;
-        let cookieString = `${key}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
-        if (this.domain) cookieString += `; domain=${this.domain}`;
-        document.cookie = cookieString;
+    removeItem(_key: string): void {
+        // No-op: cookie is cleared server-side during logout.
     }
 }

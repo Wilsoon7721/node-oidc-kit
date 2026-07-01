@@ -30,6 +30,7 @@ export function createAuthMiddleware(config: any) {
                     maxAge: 31536000,
                     sameSite: 'lax',
                     secure: true,
+                    httpOnly: true,
                     domain: config.cookieDomain
                 });
 
