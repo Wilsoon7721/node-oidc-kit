@@ -1,6 +1,6 @@
 {
   "name": "@wilsoon/auth-core",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "description": "Core logic for WilsoonID Auth",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -19,12 +19,19 @@
     "dev": "tsup --watch",
     "build": "tsup",
     "test": "vitest run",
-    "lint": "eslint src/**/*.ts"
+    "lint": "eslint src test",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^5.0.0",
     "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
     "vitest": "^1.0.0"
+  },
+  "dependencies": {
+    "jose": "^5.10.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

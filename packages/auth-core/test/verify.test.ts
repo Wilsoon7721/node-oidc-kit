@@ -1,0 +1,261 @@
+import { SignJWT } from 'jose';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+    AuthClient,
+    ClaimValidationError,
+    DiscoveryError,
+    IssuerMismatchError,
+    MemoryStorage,
+    NonceMismatchError,
+    NoTokenError,
+    TokenVerificationError,
+} from '../src/index';
+import { API_AUDIENCE, CLIENT_ID, OTHER_CLIENT_ID, attackerKeys, startFakeIdp, unsignedToken, type FakeIdp } from './fake-idp';
+
+let idp: FakeIdp;
+const client = () => new AuthClient({
+    clientId: CLIENT_ID,
+    issuer: idp.issuer,
+    redirectUri: 'http://localhost:3000/callback',
+    apiAudience: API_AUDIENCE,
+}, new MemoryStorage());
+
+beforeAll(async () => {
+    idp = await startFakeIdp();
+});
+
+afterAll(async () => {
+    await idp.close();
+});
+
+describe('verifyIdToken', () => {
+    it('accepts a correctly signed token and maps the security claims', async () => {
+        const user = await client().verifyIdToken(await idp.mintIdToken());
+
+        expect(user.id).toBe('user-1');
+        expect(user.role).toBe('admin');
+        expect(user.authMethods).toEqual(['mfa', 'fido', 'hw']);
+        expect(user.sessionVersion).toBe(3);
+        expect(user.audience).toBe(CLIENT_ID);
+        expect(user.issuer).toBe(idp.issuer);
+        expect(user.email).toBe('ada@example.com');
+        expect(user.claims.sub).toBe('user-1');
+    });
+
+    it('rejects an unsigned alg:none token that claims admin', async () => {
+        const forged = unsignedToken({
+            sub: 'user-1',
+            role: 'admin',
+            amr: ['mfa', 'fido', 'hw'],
+            session_version: 99,
+            email: 'attacker@example.com',
+            iss: idp.issuer,
+            aud: CLIENT_ID,
+            exp: Math.floor(Date.now() / 1000) + 3600,
+        });
+
+        await expect(client().verifyIdToken(forged)).rejects.toThrow(TokenVerificationError);
+    });
+
+    it('rejects a token signed with an unpublished key', async () => {
+        const { privateKey } = await attackerKeys();
+        const forged = await idp.mintIdToken({ role: 'admin' }, { key: privateKey });
+
+        await expect(client().verifyIdToken(forged)).rejects.toThrow(TokenVerificationError);
+    });
+
+    it('rejects an HMAC token that reuses the algorithm confusion trick', async () => {
+        const hmac = await new SignJWT({ sub: 'user-1', role: 'admin', aud: CLIENT_ID })
+            .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+            .setIssuer(idp.issuer)
+            .setIssuedAt()
+            .setExpirationTime(Math.floor(Date.now() / 1000) + 3600)
+            .sign(new Uint8Array(32));
+
+        await expect(client().verifyIdToken(hmac)).rejects.toThrow(TokenVerificationError);
+    });
+
+    it('rejects a token minted for a different application (token substitution)', async () => {
+        const otherApp = await idp.mintIdToken({}, { audience: OTHER_CLIENT_ID });
+
+        await expect(client().verifyIdToken(otherApp)).rejects.toThrow(TokenVerificationError);
+    });
+
+    it('rejects a token from a different issuer', async () => {
+        const foreign = await idp.mintIdToken({}, { issuer: 'https://evil.example.com' });
+
+        await expect(client().verifyIdToken(foreign)).rejects.toThrow(TokenVerificationError);
+    });
+
+    it('rejects an expired token', async () => {
+        const expired = await idp.mintIdToken({}, { expiresInSeconds: -3600 });
+
+        await expect(client().verifyIdToken(expired)).rejects.toThrow(TokenVerificationError);
+    });
+
+    it('rejects a token with no exp claim', async () => {
+        const eternal = await idp.mintIdToken({}, { withoutExpiry: true });
+
+        await expect(client().verifyIdToken(eternal)).rejects.toThrow(TokenVerificationError);
+    });
+
+    it('rejects a malformed token', async () => {
+        await expect(client().verifyIdToken('not-a-jwt')).rejects.toThrow(NoTokenError);
+        await expect(client().verifyIdToken('')).rejects.toThrow(NoTokenError);
+    });
+
+    it('requires the nonce to match the authorization request', async () => {
+        const token = await idp.mintIdToken({ nonce: 'nonce-from-another-request' });
+
+        await expect(client().verifyIdToken(token, { nonce: 'nonce-for-this-request' })).rejects.toThrow(NonceMismatchError);
+        await expect(client().verifyIdToken(await idp.mintIdToken({ nonce: 'abc' }), { nonce: 'abc' })).resolves.toMatchObject({ nonce: 'abc' });
+    });
+
+    it('rejects a token with no nonce when one was expected', async () => {
+        await expect(client().verifyIdToken(await idp.mintIdToken(), { nonce: 'abc' })).rejects.toThrow(NonceMismatchError);
+    });
+
+    it('enforces a maximum authentication age for step-up checks', async () => {
+        const stale = await idp.mintIdToken({ auth_time: Math.floor(Date.now() / 1000) - 7200 });
+
+        await expect(client().verifyIdToken(stale, { maxAuthAgeSeconds: 300 })).rejects.toThrow(ClaimValidationError);
+        await expect(client().verifyIdToken(await idp.mintIdToken(), { maxAuthAgeSeconds: 300 })).resolves.toBeDefined();
+    });
+
+    it('validates role at the boundary instead of asserting it', async () => {
+        await expect(client().verifyIdToken(await idp.mintIdToken({ role: 'superuser' }))).rejects.toThrow(ClaimValidationError);
+
+        const noRole = await client().verifyIdToken(await idp.mintIdToken({ role: undefined }));
+        expect(noRole.role).toBe('user');
+    });
+
+    it('reads security claims from a nested oidc_fields payload as well as a flat one', async () => {
+        const nested = await idp.mintIdToken({
+            role: undefined,
+            session_version: undefined,
+            oidc_fields: { role: 'user', session_version: 7, id: 'user-1' },
+        });
+
+        const user = await client().verifyIdToken(nested);
+        expect(user.role).toBe('user');
+        expect(user.sessionVersion).toBe(7);
+    });
+
+    it('caches the key set across verifications', async () => {
+        const shared = client();
+        const before = idp.jwksHits;
+
+        await shared.verifyIdToken(await idp.mintIdToken());
+        await shared.verifyIdToken(await idp.mintIdToken());
+
+        expect(idp.jwksHits - before).toBe(1);
+    });
+
+    it('recovers when the provider rotates its key without changing the kid', async () => {
+        const shared = client();
+        await shared.verifyIdToken(await idp.mintIdToken());
+
+        await idp.rotateKey();
+        const afterRotation = await idp.mintIdToken();
+
+        await expect(shared.verifyIdToken(afterRotation)).resolves.toMatchObject({ id: 'user-1' });
+    });
+});
+
+describe('verifyAccessToken', () => {
+    it('verifies a token against the pinned audience', async () => {
+        const claims = await client().verifyAccessToken(await idp.mintAccessToken());
+
+        expect(claims.subject).toBe('user-1');
+        expect(claims.scopes).toEqual(['openid', 'profile', 'email']);
+        expect(claims.audience).toContain(API_AUDIENCE);
+        expect(claims.jwtId).toBe('jti-1');
+    });
+
+    it('refuses to verify without an audience to pin', async () => {
+        const unpinned = new AuthClient({
+            clientId: CLIENT_ID,
+            issuer: idp.issuer,
+            redirectUri: 'http://localhost:3000/callback',
+        }, new MemoryStorage());
+
+        await expect(unpinned.verifyAccessToken(await idp.mintAccessToken())).rejects.toThrow(ClaimValidationError);
+    });
+
+    it('rejects a token issued for another resource server', async () => {
+        const other = await idp.mintAccessToken({}, { audience: 'https://other-api.example.com' });
+
+        await expect(client().verifyAccessToken(other)).rejects.toThrow(TokenVerificationError);
+    });
+
+    it('rejects an ID token passed where an access token is expected', async () => {
+        await expect(client().verifyAccessToken(await idp.mintIdToken())).rejects.toThrow(TokenVerificationError);
+    });
+
+    it('enforces required scopes', async () => {
+        const token = await idp.mintAccessToken({ scope: 'openid' });
+
+        await expect(client().verifyAccessToken(token, { requiredScopes: ['openid', 'offline_access'] })).rejects.toThrow(ClaimValidationError);
+        await expect(client().verifyAccessToken(token, { requiredScopes: ['openid'] })).resolves.toBeDefined();
+    });
+});
+
+describe('discovery', () => {
+    it('refuses a discovery document that advertises a different issuer', async () => {
+        idp.setAdvertisedIssuer('https://evil.example.com');
+        try {
+            await expect(client().verifyIdToken(await idp.mintIdToken())).rejects.toThrow(IssuerMismatchError);
+        } finally {
+            idp.setAdvertisedIssuer(null);
+        }
+    });
+
+    it('allows an explicit expectedIssuer override', async () => {
+        idp.setAdvertisedIssuer('https://id.wilsoon.dev');
+        try {
+            const overridden = new AuthClient({
+                clientId: CLIENT_ID,
+                issuer: idp.issuer,
+                redirectUri: 'http://localhost:3000/callback',
+                expectedIssuer: idp.issuer,
+            }, new MemoryStorage());
+
+            await expect(overridden.verifyIdToken(await idp.mintIdToken())).resolves.toMatchObject({ id: 'user-1' });
+        } finally {
+            idp.setAdvertisedIssuer(null);
+        }
+    });
+
+    it('fails when the discovery document cannot be reached', async () => {
+        const unreachable = new AuthClient({
+            clientId: CLIENT_ID,
+            issuer: 'http://127.0.0.1:1/',
+            redirectUri: 'http://localhost:3000/callback',
+        }, new MemoryStorage());
+
+        await expect(unreachable.verifyIdToken(await idp.mintIdToken())).rejects.toThrow(DiscoveryError);
+    });
+});
+
+describe('unverified decode paths', () => {
+    it('parseIdToken still decodes, but warns and never claims verification', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => { });
+        const forged = unsignedToken({ sub: 'attacker', role: 'admin', amr: ['mfa'], session_version: 99 });
+
+        const decoded = client().parseIdToken(forged);
+
+        expect(decoded.role).toBe('admin');
+        expect(decoded.authMethods).toEqual(['mfa']);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('does not verify'));
+        warn.mockRestore();
+    });
+
+    it('decodeIdTokenUnsafe throws on a malformed token', () => {
+        expect(() => client().decodeIdTokenUnsafe('a.b')).toThrow(NoTokenError);
+        expect(() => client().decodeIdTokenUnsafe('a.!!.c')).toThrow(NoTokenError);
+    });
+
+    it('getUser rejects an ID token before it reaches the network', async () => {
+        await expect(client().getUser(await idp.mintIdToken())).rejects.toThrow(ClaimValidationError);
+    });
+});

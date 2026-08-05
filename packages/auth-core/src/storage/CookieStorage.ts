@@ -1,7 +1,7 @@
 import { AuthStorage } from '../storage';
 
 /**
- * @deprecated Since v1.2.0 — CookieStorage is deprecated.
+ * @deprecated Since v1.2.0 - CookieStorage is deprecated.
  *
  * The `wilsoon_id_tokens` cookie is now set as `HttpOnly` by the server,
  * making it invisible to `document.cookie`. All client-side read/write/remove
