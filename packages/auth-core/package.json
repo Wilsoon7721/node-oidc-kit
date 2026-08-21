@@ -1,7 +1,27 @@
 {
   "name": "@wilsoon/auth-core",
-  "version": "2.0.0",
-  "description": "Core logic for WilsoonID Auth",
+  "version": "2.0.1",
+  "description": "Framework-agnostic OpenID Connect relying party: discovery, PKCE, and token verification for browsers, Node and edge runtimes",
+  "keywords": [
+    "oidc",
+    "openid-connect",
+    "oauth2",
+    "pkce",
+    "jwt",
+    "authentication",
+    "jose",
+    "sso"
+  ],
+  "author": "Wilson Oon",
+  "homepage": "https://github.com/Wilsoon7721/node-oidc-kit/tree/main/packages/auth-core#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Wilsoon7721/node-oidc-kit.git",
+    "directory": "packages/auth-core"
+  },
+  "bugs": {
+    "url": "https://github.com/Wilsoon7721/node-oidc-kit/issues"
+  },
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -33,5 +53,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

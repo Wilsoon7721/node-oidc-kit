@@ -1,6 +1,11 @@
 # @wilsoon/auth-core
 
-The core logic library for the Wilsoon Identity platform. It provides the isomorphic building blocks to implement OIDC-compliant authentication flows in both browser and Node.js server environments.
+The framework-agnostic core: an OpenID Connect **relying party** that runs unchanged in a
+browser, in Node 18+, and on edge runtimes. Point it at any conforming issuer via discovery
+and get back a verified user.
+
+Part of the [Wilsoon Node OIDC Kit](https://github.com/Wilsoon7721/node-oidc-kit) - an OpenID Connect relying party for TypeScript.
+Siblings: **`@wilsoon/auth-core`** · [`@wilsoon/auth-react`](https://www.npmjs.com/package/@wilsoon/auth-react) · [`@wilsoon/auth-next`](https://www.npmjs.com/package/@wilsoon/auth-next).
 
 ## Features
 
@@ -16,9 +21,12 @@ The core logic library for the Wilsoon Identity platform. It provides the isomor
 npm install @wilsoon/auth-core
 ```
 
-Wiring up a whole application? Start with the [integration guide](../../INTEGRATION.md) -
-end-to-end recipes for Next.js, React SPAs, other server frameworks and APIs, plus a
-troubleshooting table.
+Wiring up a whole application? Start with the [integration guide](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/INTEGRATION.md) - end-to-end recipes
+for Next.js, React SPAs, other server frameworks and APIs, plus a troubleshooting table.
+
+Using a framework with no package here (Astro, SvelteKit, Hono, Express)? Use this package
+directly and supply one [storage adapter](https://github.com/Wilsoon7721/node-oidc-kit#storage-the-one-thing-to-understand). That is
+the entire integration.
 
 ## Authorization in one call
 
@@ -29,8 +37,8 @@ import { AMR, AuthClient, MemoryStorage, satisfiesAmr } from "@wilsoon/auth-core
 
 const client = new AuthClient(
   {
-    clientId: process.env.WILSOON_CLIENT_ID!,
-    issuer: "https://id.wilsoon.dev",
+    clientId: process.env.OIDC_CLIENT_ID!,
+    issuer: "https://id.example.com",
     redirectUri: "https://app.example.com/callback",
   },
   new MemoryStorage(),
@@ -48,8 +56,8 @@ Nothing else in the SDK is a substitute for this. The userinfo endpoint returns 
 
 ## Several services, one login
 
-When first-party services share the `.wilsoon.dev` session cookie, that cookie holds the tokens
-of whichever service most recently completed a code exchange. Each service is its own client, so
+When first-party services share one domain-wide session cookie (set on `.example.com`, say),
+that cookie holds the tokens of whichever service most recently completed a code exchange. Each service is its own client, so
 the ID token inside it is addressed to that service alone - the access token is the one addressed
 to the whole platform.
 
@@ -64,7 +72,7 @@ user.source; // 'access_token'
 Needs `apiAudience` and a `clientSecret`. Set `platformSessionCacheSeconds` to reuse a resolved
 session briefly instead of introspecting on every request. `@wilsoon/auth-next`'s `getSession()`
 picks this path automatically when the cookie's ID token belongs to a sibling service - see the
-[integration guide](../../INTEGRATION.md#two-session-models--pick-yours-first).
+[integration guide](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/INTEGRATION.md#two-session-models--pick-yours-first).
 
 ## The login flow
 
@@ -100,7 +108,7 @@ Access tokens are issued with an audience shared across applications, so each re
 
 ```typescript
 const claims = await client.verifyAccessToken(bearerToken, {
-  audience: "https://api.wilsoon.dev",
+  audience: "https://api.example.com",
   requiredScopes: ["openid"],
 });
 ```
@@ -122,7 +130,8 @@ const claims = await client.verifyAccessToken(bearerToken, {
 
 ## Authentication methods (`amr`)
 
-The provider composes `amr` like this:
+Which `amr` values a provider emits is up to that provider; `satisfiesAmr()` compares plain
+strings, so any vocabulary works. The reference provider composes them like this:
 
 | Login                       | `amr`                    |
 | --------------------------- | ------------------------ |
@@ -141,7 +150,10 @@ assertAmr(user, [AMR.FIDO]); // throws ClaimValidationError
 
 ## Session revocation
 
-The provider bumps `users.session_version` when a user revokes every session, and the ID token carries the version it was minted with. It does not expose the live value to relying parties, so supply a resolver to make revocation enforceable:
+A JWT stays valid until it expires, so "sign out everywhere" does not take effect on its own.
+The reference provider bumps a per-user session version on revocation, and the ID token carries
+the version it was minted with. Comparing the two is what makes revocation enforceable - supply
+a resolver so the SDK can read the live value:
 
 ```typescript
 const client = new AuthClient({
@@ -189,7 +201,8 @@ All errors extend `AuthError` and carry a stable `code`. `error instanceof State
 
 ## Migrating from 1.x
 
-Nothing was removed; the unsafe paths still work and now warn. The changes that need attention:
+Nothing was removed; the unsafe paths still work and now warn. The changes that need attention
+(full notes in the [changelog](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/CHANGELOG.md)):
 
 1. **Authorize on `verifyIdToken()`.** `parseIdToken()` never checked a signature, so `role`/`authMethods` from it are attacker-controlled. It still decodes (for display), is `@deprecated`, warns once per process, and its return type is now `UnverifiedUser` with every security field optional.
 
@@ -216,8 +229,20 @@ Nothing was removed; the unsafe paths still work and now warn. The changes that 
 
 The token endpoint spreads identity claims flat onto the ID token (`role`, `amr`, `session_version`), while some documentation nests them under `oidc_fields`. Both shapes are read, with the nested one preferred when present. `sub` is always treated as the authoritative subject identifier.
 
+## Roles
+
+`UserRole` is `'admin' | 'user'`, and a `role` claim outside that set throws
+`ClaimValidationError` rather than being asserted into the union - silently mapping an unknown
+role onto a known one is how privilege escalations ship. A provider that issues other roles
+needs `UserRole` and `USER_ROLES` in `types.ts` widened together. See
+[the provider-specific list](https://github.com/Wilsoon7721/node-oidc-kit#things-that-are-still-specific-to-one-provider).
+
 ## Environments Supported
 
 Node.js 18+, modern browsers, and edge runtimes - anything with the Web Crypto API on `globalThis.crypto` and `fetch`. The old `require('crypto')` fallbacks were removed: `require` does not exist in ESM or on Workers, so they threw `ReferenceError` instead of degrading. A runtime without Web Crypto now fails with `CryptoUnavailableError`.
 
 Signature verification uses [`jose`](https://github.com/panva/jose), the package's only runtime dependency.
+
+## License
+
+[MIT](./LICENSE) - free use, forking and redistribution, with no warranty of any kind.

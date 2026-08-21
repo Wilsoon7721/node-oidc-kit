@@ -1,17 +1,18 @@
 import { AuthStorage } from '../storage';
 
 /**
- * @deprecated Since v1.2.0 - CookieStorage is deprecated.
+ * @deprecated Since v1.2.0. Every method is a no-op; the class is kept only so existing
+ * `new CookieStorage()` calls keep compiling.
  *
- * The `wilsoon_id_tokens` cookie is now set as `HttpOnly` by the server,
- * making it invisible to `document.cookie`. All client-side read/write/remove
- * operations are no-ops.
+ * It was written when the token cookie was readable from `document.cookie`. The provider
+ * now sets that cookie `HttpOnly`, which is the correct thing for it to do and also means
+ * no browser-side cookie adapter can ever see it again.
  *
- * **Migration**: Use `AuthClient.hydrateSession()` to load authentication state
- * on page load. The server reads the HttpOnly cookie automatically when
- * `credentials: 'include'` is set on fetch requests.
- *
- * For non-HttpOnly use cases (e.g., localStorage), use `BrowserStorage` instead.
+ * **Instead:** call `AuthClient.hydrateSession()` on page load - the browser attaches the
+ * HttpOnly cookie itself on a `credentials: 'include'` request, so the provider can answer
+ * from it. Use {@link BrowserStorage} when you genuinely want JS-visible client storage,
+ * and a server-side cookie adapter (`ServerCookieStorage`, or your own - see
+ * {@link AuthStorage}) when you want to own the cookie yourself.
  */
 export class CookieStorage implements AuthStorage {
     private static _deprecationWarned = false;
@@ -27,30 +28,14 @@ export class CookieStorage implements AuthStorage {
         }
     }
 
-    /**
-     * @deprecated No-op. HttpOnly cookies cannot be read via `document.cookie`.
-     * Use `AuthClient.hydrateSession()` instead.
-     * @param _key The cookie name (unused).
-     * @returns Always returns null.
-     */
+    /** @deprecated Always `null`: an HttpOnly cookie is not visible to `document.cookie`. */
     getItem(_key: string): string | null {
         return null;
     }
 
-    /**
-     * @deprecated No-op. The auth cookie is set server-side by `/api/token` with the HttpOnly flag.
-     * @param _key The cookie name (unused).
-     * @param _value The cookie value (unused).
-     */
-    setItem(_key: string, _value: string): void {
-        // No-op: cookie is set server-side by /api/token with HttpOnly flag.
-    }
+    /** @deprecated No-op: the provider sets the token cookie at its token endpoint. */
+    setItem(_key: string, _value: string): void { }
 
-    /**
-     * @deprecated No-op. The auth cookie is cleared server-side during logout via `/api/logout`.
-     * @param _key The cookie name (unused).
-     */
-    removeItem(_key: string): void {
-        // No-op: cookie is cleared server-side during logout.
-    }
+    /** @deprecated No-op: the provider clears the token cookie at its logout endpoint. */
+    removeItem(_key: string): void { }
 }

@@ -1,7 +1,26 @@
 {
   "name": "@wilsoon/auth-next",
-  "version": "2.0.0",
-  "description": "Next.js utilities for WilsoonID Auth",
+  "version": "2.0.1",
+  "description": "OpenID Connect for the Next.js App Router: verified sessions, middleware and hardened cookie storage",
+  "keywords": [
+    "oidc",
+    "openid-connect",
+    "nextjs",
+    "authentication",
+    "middleware",
+    "sso",
+    "oauth2"
+  ],
+  "author": "Wilson Oon",
+  "homepage": "https://github.com/Wilsoon7721/node-oidc-kit/tree/main/packages/auth-next#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Wilsoon7721/node-oidc-kit.git",
+    "directory": "packages/auth-next"
+  },
+  "bugs": {
+    "url": "https://github.com/Wilsoon7721/node-oidc-kit/issues"
+  },
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -40,5 +59,11 @@
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -1,5 +1,9 @@
 /**
- * Base class for all Wilsoon ID authentication errors.
+ * Base class for every error this SDK throws.
+ *
+ * Catch `AuthError` to handle any authentication failure, or a subclass to handle one
+ * cause. Each carries a stable `code`, which is what to branch on - the messages are
+ * written for humans and may be reworded between releases.
  */
 export class AuthError extends Error {
     constructor(message: string, public code?: string, options?: { cause?: unknown }) {
@@ -13,8 +17,12 @@ export class AuthError extends Error {
 }
 
 /**
- * Thrown when the state returned from the OIDC provider does not match the locally stored state.
- * This is a critical security check to prevent CSRF attacks.
+ * Thrown when the callback's `state` does not match the value stored when the
+ * authorization request was created - the CSRF check on the login flow.
+ *
+ * In practice this is most often benign: a stale bookmark of a callback URL, a login
+ * finished in a different tab, or transient cookies dropped by `SameSite=Strict`. It is
+ * still never safe to continue past it.
  */
 export class StateMismatchError extends AuthError {
     constructor() {
@@ -35,7 +43,9 @@ export class NonceMismatchError extends AuthError {
 }
 
 /**
- * Thrown when the OIDC discovery document cannot be retrieved from the issuer.
+ * Thrown when `/.well-known/openid-configuration` cannot be fetched, or is missing an
+ * endpoint the SDK requires (`authorization_endpoint`, `token_endpoint`,
+ * `userinfo_endpoint`, `jwks_uri`).
  */
 export class DiscoveryError extends AuthError {
     constructor(issuer: string) {
@@ -60,9 +70,7 @@ export class IssuerMismatchError extends AuthError {
     }
 }
 
-/**
- * Thrown when the authorization code cannot be exchanged for tokens at the token endpoint.
- */
+/** Thrown when the token endpoint refuses the authorization code, or returns no access token. */
 export class TokenExchangeError extends AuthError {
     constructor(public originalError?: any) {
         super(
@@ -73,9 +81,7 @@ export class TokenExchangeError extends AuthError {
     }
 }
 
-/**
- * Thrown when user information cannot be retrieved from the userinfo endpoint.
- */
+/** Thrown when the userinfo endpoint cannot be read. */
 export class UserInfoError extends AuthError {
     constructor() {
         super('Failed to fetch user info.', 'USER_INFO_FAILED');
@@ -84,7 +90,11 @@ export class UserInfoError extends AuthError {
 }
 
 /**
- * Thrown when a refresh token cannot be used to obtain new access tokens.
+ * Thrown when a refresh fails.
+ *
+ * Usually terminal rather than retryable: with rotating refresh tokens the provider
+ * revokes the whole family when one is replayed, so the right response is to sign the user
+ * out rather than to try again.
  */
 export class TokenRefreshError extends AuthError {
     constructor(public originalError?: any) {
@@ -96,9 +106,7 @@ export class TokenRefreshError extends AuthError {
     }
 }
 
-/**
- * Thrown when the logout URL cannot be generated, typically due to a missing end_session_endpoint.
- */
+/** Thrown when the provider advertises no `end_session_endpoint`, so RP-initiated logout is unavailable. */
 export class LogoutError extends AuthError {
     constructor() {
         super('Failed to generate logout URL.', 'LOGOUT_FAILED');
@@ -106,9 +114,7 @@ export class LogoutError extends AuthError {
     }
 }
 
-/**
- * Thrown when an ID token is missing or cannot be parsed.
- */
+/** Thrown when a token that an operation requires is absent, empty, or not a compact JWS. */
 export class NoTokenError extends AuthError {
     constructor(message: string) {
         super(message, 'NO_TOKEN');

@@ -30,7 +30,13 @@ export interface AuthMiddlewareOptions extends AuthConfig {
     roles?: UserRole[];
     /** Require these authentication methods (`amr`). Requires verification. */
     amr?: string[];
-    /** Name of the cookie holding the token response (default `wilsoon_id_tokens`). */
+    /**
+     * Name of the cookie holding the token response (default `STORAGE_KEYS.tokens`).
+     *
+     * Set this when the provider writes the session cookie under a name of its own. Only
+     * the token blob is remapped; the transient `state`/`nonce`/verifier cookies keep their
+     * SDK names, because the SDK is the only thing that ever writes them.
+     */
     cookieName?: string;
     /** Lifetime of the refreshed cookie, in seconds (default 1 year). */
     cookieMaxAgeSeconds?: number;
@@ -51,11 +57,21 @@ class RequestCookieStorage implements AuthStorage {
 }
 
 /**
- * Creates a Next.js middleware that protects routes, verifies the session and refreshes
- * expiring tokens.
+ * Builds a Next.js middleware that gates routes on a verified session, refreshing tokens
+ * that are about to expire.
  *
- * @param options The authentication configuration plus routing and policy options.
- * @returns A middleware function for Next.js.
+ * Per request, in order: read the session cookie; refresh if the access token is near
+ * expiry (writing the rotated tokens back onto the response); then verify, and check the
+ * `roles`/`amr` policy if one was given. Any failure redirects to `loginPath` and expires
+ * the cookie, so a request never proceeds on a session that could not be verified.
+ *
+ * Scope it with a `config.matcher` as usual - it runs on every matched request, and
+ * verification is not free even with the JWKS cached.
+ *
+ * ```ts
+ * export default createAuthMiddleware({ ...authConfig, roles: ['admin'] });
+ * export const config = { matcher: ['/admin/:path*'] };
+ * ```
  */
 export function createAuthMiddleware(options: AuthMiddlewareOptions) {
     const loginPath = options.loginPath ?? '/auth';
@@ -79,10 +95,10 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions) {
         const signOut = (pathname: string) => {
             const response = NextResponse.redirect(redirectTo(pathname));
 
-            // Expiring a domain-scoped cookie requires naming the same domain - a bare
-            // delete() only clears a host-only cookie, leaving the `.wilsoon.dev` one the
-            // provider set in place and the user in a redirect loop. Set `cookieDomain` to
-            // whatever the provider writes.
+            // Expiring a domain-scoped cookie requires naming the same domain. A bare
+            // delete() only clears a host-only cookie, leaving the domain-wide one the
+            // provider set in place - so the next request reads the same dead session and
+            // the user loops. Set `cookieDomain` to whatever the provider writes.
             response.cookies.set(cookieName, '', {
                 path: '/',
                 maxAge: 0,

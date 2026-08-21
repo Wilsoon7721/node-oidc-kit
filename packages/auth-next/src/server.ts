@@ -45,11 +45,9 @@ export interface GetSessionOptions {
  * if (!user || user.role !== 'admin') return notFound();
  * ```
  *
- * Fails closed: any verification failure yields `user: null` with the reason in `error`.
- *
- * @param config The authentication configuration.
- * @param options Cookie options for the underlying storage.
- * @returns A promise resolving to the verified user and the raw tokens.
+ * Fails closed: any verification failure yields `user: null`, with the reason in `error`
+ * rather than as a thrown exception, so a page can render a signed-out state and still log
+ * why.
  */
 export async function getSession(config: AuthConfig, options: GetSessionOptions = {}): Promise<Session> {
     let tokens: TokenResponse | null = null;
@@ -69,12 +67,14 @@ export async function getSession(config: AuthConfig, options: GetSessionOptions 
 }
 
 /**
- * Resolves the session and throws unless it satisfies a policy - the one-call access check
- * for a Server Component or Route Handler.
+ * {@link getSession} that throws unless the session satisfies a policy - the one-call
+ * access check for a Server Component or Route Handler.
  *
- * @param config The authentication configuration.
+ * The thrown {@link AuthError} carries a `code` (`NO_SESSION`, `FORBIDDEN`, or the
+ * underlying verification failure) so an error boundary can tell "sign in" apart from
+ * "you may not see this".
+ *
  * @param policy Roles and authentication methods the session must satisfy.
- * @returns The verified user.
  * @throws {AuthError} If there is no valid session, or it does not satisfy the policy.
  */
 export async function requireSession(

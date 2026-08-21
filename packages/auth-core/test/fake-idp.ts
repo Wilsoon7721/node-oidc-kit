@@ -17,7 +17,7 @@ export interface TokenEndpointResult {
 }
 
 /**
- * A minimal stand-in for the Wilsoon identity provider: it publishes the same discovery
+ * A minimal stand-in for a real identity provider: it publishes the same discovery
  * document and JWKS shape, and signs tokens with the same claim layout.
  *
  * A real HTTP server rather than a `fetch` mock, because jose fetches the JWKS through
@@ -69,6 +69,7 @@ export function unsignedToken(payload: Record<string, unknown>): string {
     return `${base64Url({ alg: 'none', typ: 'JWT' })}.${base64Url(payload)}.`;
 }
 
+/** Starts the fake IdP: real RS256-signed tokens and discovery, nothing over the network. */
 export async function startFakeIdp(): Promise<FakeIdp> {
     let keys = await generateKeyPair('RS256', { extractable: true });
 

@@ -2,7 +2,7 @@ import { AuthStorage, STORAGE_KEYS, StorageUnavailableError } from '@wilsoon/aut
 
 /** Cookie attributes used when this storage writes. */
 export interface ServerCookieStorageOptions {
-    /** Cookie domain, e.g. `.wilsoon.dev` for sharing across subdomains. */
+    /** Cookie domain. Set a leading-dot domain (`.example.com`) to share the session across subdomains. */
     domain?: string;
     /** Marks cookies `Secure`. Defaults to true outside `NODE_ENV=development`. */
     secure?: boolean;
@@ -19,34 +19,26 @@ export interface ServerCookieStorageOptions {
 const TRANSIENT_KEYS: string[] = [STORAGE_KEYS.state, STORAGE_KEYS.nonce, STORAGE_KEYS.codeVerifier];
 
 /**
- * Implementation of AuthStorage backed by the Next.js cookie store.
+ * An {@link AuthStorage} backed by the Next.js cookie store.
  *
  * Reads work anywhere `cookies()` is available. Writes work in Route Handlers, Server
- * Actions and middleware - the contexts where Next.js allows setting cookies - and throw a
- * descriptive {@link StorageUnavailableError} in a Server Component, where they cannot.
+ * Actions and middleware - the contexts where Next.js permits setting cookies - and throw
+ * a {@link StorageUnavailableError} naming the fix in a Server Component, where they
+ * cannot.
  *
  * Writes are always `HttpOnly` with `SameSite=Lax`, so the `state`, `nonce` and PKCE
- * verifier the SDK persists are not readable from JavaScript and survive the redirect back
- * from the identity provider. Consumers no longer have to invent these flags themselves.
+ * verifier are unreadable from JavaScript and still survive the redirect back from the
+ * identity provider. The two lifetimes differ deliberately: those three values are
+ * single-use and expire in minutes, the token blob lives as long as the session.
  */
 export class ServerCookieStorage implements AuthStorage {
     constructor(private cookieStore: any, private options: ServerCookieStorageOptions = {}) { }
 
-    /**
-     * Gets a cookie value by key from the Next.js cookie store.
-     * @param key The cookie name.
-     * @returns The cookie value or null.
-     */
     getItem(key: string): string | null {
         return this.cookieStore?.get(key)?.value ?? null;
     }
 
-    /**
-     * Writes a cookie with hardened attributes.
-     * @param key The cookie name.
-     * @param value The value to store.
-     * @throws {StorageUnavailableError} If the current context cannot set cookies.
-     */
+    /** @throws {StorageUnavailableError} If this context cannot set cookies. */
     setItem(key: string, value: string): void {
         const isTransient = TRANSIENT_KEYS.includes(key);
 
@@ -70,11 +62,7 @@ export class ServerCookieStorage implements AuthStorage {
         }
     }
 
-    /**
-     * Deletes a cookie.
-     * @param key The cookie name.
-     * @throws {StorageUnavailableError} If the current context cannot modify cookies.
-     */
+    /** @throws {StorageUnavailableError} If this context cannot modify cookies. */
     removeItem(key: string): void {
         try {
             this.cookieStore.delete(key);

@@ -4,12 +4,10 @@ import { AuthClient, AuthenticatedUser, AuthError, decodeTokenPayloadUnsafe, Tok
  * Establishes the verified user behind a token response, returning the failure rather than
  * throwing so callers can fail closed and still report why.
  *
- * The routing itself lives in `AuthClient.resolveSession()` so that every framework - not just
+ * The routing itself lives in `AuthClient.resolveSession()` so every framework - not just
  * Next.js - gets the same behaviour.
  *
- * @param client The client for this application.
- * @param tokens The token response read from the session cookie.
- * @returns The verified user, or an error explaining why there is no session.
+ * @returns The verified user, or the error explaining why there is no session.
  */
 export async function resolveSessionUser(client: AuthClient, tokens: TokenResponse): Promise<{ user: AuthenticatedUser | null; error?: AuthError }> {
     try {
@@ -22,12 +20,8 @@ export async function resolveSessionUser(client: AuthClient, tokens: TokenRespon
 /**
  * Whether a token *claims* the given audience.
  *
- * A routing hint only - never a trust decision. Whichever branch it selects, the token is then
- * verified properly, so a forged `aud` buys nothing.
- *
- * @param token The token to inspect.
- * @param clientId The audience to look for.
- * @returns True when the token's `aud` contains that value.
+ * A routing hint only - never a trust decision. Whichever branch it selects, the token is
+ * then verified properly, so a forged `aud` buys nothing.
  */
 export function isAddressedTo(token: string, clientId: string): boolean {
     try {

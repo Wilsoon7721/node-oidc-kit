@@ -16,30 +16,13 @@ const AuthContext = createContext<AuthState | null>(null);
  * against the identity provider's published keys. The resulting user is marked
  * `verified: true`, and only then does it carry `role`, `authMethods` and `sessionVersion`.
  *
- * On a normal page load the provider hydrates from the HttpOnly `wilsoon_id_tokens` cookie
- * by calling the userinfo endpoint with `credentials: 'include'`. That endpoint returns
- * profile claims only, so the hydrated user is marked `verified: false` and has no
- * authorization fields - narrow on `user.verified` before reading them.
- *
- * Client-side state is for rendering. Authorization decisions belong on the server, where
- * `@wilsoon/auth-next`'s `getSession()`/`requireSession()` verify the token per request.
- *
- * **Token Refresh Strategies:**
- * Because the `wilsoon_id_tokens` cookie is `HttpOnly`, this provider cannot proactively
- * refresh tokens on the client side. You must implement one of the following:
- *
- * 1. **Pure React SPA (Reactive Refresh):** Set up a global Axios Interceptor or `fetch`
- *    wrapper that catches `401 Unauthorized` responses from your API, calls
- *    `client.refreshAccessToken()`, and retries the failed request.
- * 2. **Next.js / SSR (Middleware):** Use `@wilsoon/auth-next` middleware to automatically
- *    intercept and refresh tokens server-side before they reach the client.
- *
- * @param props.clientId The OAuth2 client ID.
- * @param props.issuer The OIDC issuer URL.
- * @param props.redirectUri The callback URI after login.
- * @param props.scope Optional scopes to request.
- * @param props.cookieDomain Optional domain for the auth cookie.
- * @param props.children React children.
+ * On a normal page load the provider hydrates from the HttpOnly session cookie by calling
+ * the userinfo endpoint with `credentials: 'include'`. That endpoint returns profile claims
+ * only, so the hydrated user is marked `verified: false` and carries no authorization
+ * fields. Check `user.verified` before reading them.
+ * 
+ * No refresh here. The session cookie is `HttpOnly`, so this provider cannot see the refresh token. 
+ * Instead, SPAs should react reactively (on 401s) and Next.js can utilise a middleware instead. 
  */
 export const AuthProvider: React.FC<{
   clientId: string;
@@ -119,16 +102,19 @@ export const AuthProvider: React.FC<{
       setIsLoading(true);
 
       if (tokens?.id_token) {
-        // Build the logout URL with the id_token_hint so the server can
-        // verify the session and clear the HttpOnly cookie.
+        // The id_token_hint tells the provider which session to end, so it can clear the
+        // HttpOnly cookie it set.
         const logoutUrl = await client.getLogoutUrl(tokens.id_token, returnTo);
         setUser(null);
         setTokens(null);
         window.location.href = logoutUrl;
       } else {
-        // No id_token available (e.g., hydrated session without token exchange).
-        // Redirect to the logout endpoint without the hint - the server
-        // will still clear the HttpOnly cookie via the session.
+        // A hydrated session has no id_token to hint with, and discovery cannot help:
+        // `end_session_endpoint` is what getLogoutUrl() needs the hint *for*. So fall back
+        // to the reference provider's logout path.
+        //
+        // This is the one provider-specific URL in the SDK. Against a different provider,
+        // handle logout in your own code rather than relying on this branch.
         const logoutUrl = `${config.issuer.replace(/\/+$/, '')}/api/logout?post_logout_redirect_uri=${encodeURIComponent(returnTo)}`;
         setUser(null);
         setTokens(null);
@@ -147,9 +133,8 @@ export const AuthProvider: React.FC<{
 };
 
 /**
- * Hook to access the current authentication state and actions.
- * @returns The authentication state (user, tokens, isAuthenticated, isLoading, error) and actions (login, logout).
- * @throws Error if used outside of an AuthProvider.
+ * Reads the session state and actions from the nearest {@link AuthProvider}.
+ * @throws If called outside an {@link AuthProvider}.
  */
 export const useAuth = () => {
   const context = useContext(AuthContext);

@@ -1,7 +1,26 @@
 {
   "name": "@wilsoon/auth-react",
-  "version": "2.0.0",
-  "description": "React components for WilsoonID Auth",
+  "version": "2.0.1",
+  "description": "React context and hooks for OpenID Connect browser sessions",
+  "keywords": [
+    "oidc",
+    "openid-connect",
+    "react",
+    "authentication",
+    "hooks",
+    "sso",
+    "oauth2"
+  ],
+  "author": "Wilson Oon",
+  "homepage": "https://github.com/Wilsoon7721/node-oidc-kit/tree/main/packages/auth-react#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Wilsoon7721/node-oidc-kit.git",
+    "directory": "packages/auth-react"
+  },
+  "bugs": {
+    "url": "https://github.com/Wilsoon7721/node-oidc-kit/issues"
+  },
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -39,5 +58,11 @@
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

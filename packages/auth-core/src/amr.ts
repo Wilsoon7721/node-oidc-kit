@@ -1,17 +1,26 @@
 import { ClaimValidationError } from './errors';
 
 /**
- * Authentication Method Reference values the Wilsoon identity provider emits, and helpers for checking them.
+ * Authentication Method Reference (`amr`) values, and helpers for checking them.
  *
- * The provider composes `amr` as follows:
+ * `amr` is how a token says *how* the user proved who they are, which is what step-up
+ * policies are written against. RFC 8176 registers the names; which of them a provider
+ * emits, and in what combinations, is the provider's choice. The reference provider
+ * composes them like this:
+ *
  * | Login                        | `amr`                     |
  * |------------------------------|---------------------------|
  * | Federated / social provider  | `["ext", "social"]`       |
  * | Passkey                      | `["mfa", "fido", "hw"]`   |
  * | + TOTP challenge completed   | adds `"otp"` and `"mfa"`  |
  *
- * The important consequence: **`mfa` does not imply a hardware factor.** It is present both for passkeys and for a password/social login that cleared a TOTP challenge. 
- * Require {@link AMR.FIDO} or {@link AMR.HARDWARE} explicitly when you mean "phishing-resistant".
+ * The consequence worth internalising: **`mfa` does not imply a hardware factor.** It
+ * appears both for a passkey and for a password or social login that cleared a TOTP
+ * challenge, and TOTP is phishable. Require {@link AMR.FIDO} or {@link AMR.HARDWARE}
+ * explicitly when you mean phishing-resistant.
+ *
+ * The constants are a convenience, not a constraint: {@link satisfiesAmr} compares plain
+ * strings, so a provider that emits values outside this table works without changes here.
  */
 export const AMR = {
     /** A second factor was used - either a passkey or a completed TOTP challenge. */
@@ -39,8 +48,10 @@ export interface AmrCarrier {
 /** Options for {@link satisfiesAmr}. */
 export interface SatisfiesAmrOptions {
     /**
-     * `'all'` (default) requires every listed method to be present`'any'` requires at least one. 
-     * `'all'` is the default because step-up policies are conjunctions.
+     * `'all'` (default) requires every listed method; `'any'` requires at least one.
+     *
+     * `'all'` is the default because step-up policies are conjunctions - "a hardware key
+     * *and* a recent authentication", not either one.
      */
     mode?: 'all' | 'any';
 }
@@ -62,10 +73,7 @@ const methodsOf = (source: string[] | AmrCarrier | null | undefined): string[] =
  * if (!satisfiesAmr(user, [AMR.FIDO])) return stepUp();
  * ```
  *
- * @param source A verified user (or a raw `amr` array).
  * @param required The methods the caller requires. An empty list is trivially satisfied.
- * @param options Whether all or any of the required methods must be present.
- * @returns True when the policy is satisfied.
  */
 export function satisfiesAmr(source: string[] | AmrCarrier | null | undefined, required: string[], options: SatisfiesAmrOptions = {}): boolean {
     if (!Array.isArray(required) || required.length === 0) return true;
@@ -77,10 +85,9 @@ export function satisfiesAmr(source: string[] | AmrCarrier | null | undefined, r
 }
 
 /**
- * Asserts a policy over authentication methods, for use in guard clauses.
- * @param source A verified user (or a raw `amr` array).
- * @param required The methods the caller requires.
- * @param options Whether all or any of the required methods must be present.
+ * {@link satisfiesAmr} as a guard clause: throws instead of returning false, with the
+ * present and required methods named in the message.
+ *
  * @throws {ClaimValidationError} If the policy is not satisfied.
  */
 export function assertAmr(source: string[] | AmrCarrier | null | undefined, required: string[], options: SatisfiesAmrOptions = {}): void {

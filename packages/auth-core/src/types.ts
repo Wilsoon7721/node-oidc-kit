@@ -1,7 +1,21 @@
+/**
+ * Everything the SDK needs to talk to one identity provider as one registered client.
+ *
+ * Only `clientId` and `issuer` are always required; the rest are needed per use case, and
+ * each says below which. The same object is accepted by `@wilsoon/auth-next`'s
+ * `getSession()`, `requireSession()` and `createAuthMiddleware()`, so an application
+ * normally defines it once and imports it everywhere.
+ */
 export interface AuthConfig {
-    /** The client ID assigned to your application in the Wilsoon Identity portal. */
+    /** The client identifier registered with the provider. */
     clientId: string;
-    /** The base URL of the identity provider (e.g., https://id.wilsoon.dev). */
+    /**
+     * The provider's base URL, e.g. `https://id.example.com`.
+     *
+     * Discovery appends `/.well-known/openid-configuration` to it, and the `issuer` the
+     * document advertises must match this value or the client refuses to start - see
+     * {@link AuthConfig.expectedIssuer} for the deliberate-mismatch case.
+     */
     issuer: string;
     /**
      * The URI where the user is redirected after successful authentication.
@@ -10,11 +24,28 @@ export interface AuthConfig {
      * tokens (middleware, a resource server), which has no redirect of its own.
      */
     redirectUri?: string;
-    /* Optional list of scopes to request (defaults to ['openid', 'profile', 'email']). */
+    /**
+     * Scopes to request (default `['openid', 'profile', 'email']`).
+     *
+     * Add `offline_access` if you want a refresh token; without one, the session ends when
+     * the access token expires.
+     */
     scope?: string[];
-    /** Optional domain for setting cookies across subdomains. */
+    /**
+     * Cookie domain, for adapters and middleware that write cookies. A leading-dot domain
+     * (`.example.com`) shares the session across subdomains.
+     *
+     * It must match whatever domain the cookie was set with, or clearing it silently fails
+     * and the user is stuck in a redirect loop.
+     */
     cookieDomain?: string;
-    /** Optional client secret for confidential clients. */
+    /**
+     * The client secret, for confidential clients. Server-side only - never ship this to a
+     * browser.
+     *
+     * Required for {@link AuthClient.introspectToken} and therefore for
+     * {@link AuthClient.verifyPlatformSession}.
+     */
     clientSecret?: string;
     /**
      * Optional override for the `iss` value that tokens are validated against.
@@ -27,11 +58,11 @@ export interface AuthConfig {
     expectedIssuer?: string;
     /**
      * The audience that access tokens are expected to carry (the resource server
-     * identifier, e.g. `https://api.wilsoon.dev`).
+     * identifier, e.g. `https://api.example.com`).
      *
      * Required by {@link AuthClient.verifyAccessToken} unless the audience is passed per
-     * call. There is deliberately no default: the platform issues access tokens with a
-     * shared audience, so each resource server must pin the value it accepts.
+     * call. There is deliberately no default: a provider may issue access tokens with an
+     * audience shared across applications, so each resource server must pin what it accepts.
      */
     apiAudience?: string;
     /** Leeway, in seconds, applied to `exp`/`nbf` checks during verification (default 60). */
@@ -52,11 +83,13 @@ export interface AuthConfig {
      * Resolves the user's current `session_version` from your backend, enabling
      * {@link AuthClient.isSessionCurrent}.
      *
-     * The identity provider bumps `users.session_version` when a user revokes all
-     * sessions, but it does not currently expose that value to relying parties - supply
-     * a resolver (an authenticated call to your own API, a shared cache, a DB read) to
-     * make revocation enforceable. Return `null`/`undefined` if the version cannot be
-     * determined; the check then fails closed.
+     * The reference provider bumps a per-user session version when the user revokes all
+     * sessions, but does not expose that value to relying parties outside introspection.
+     * Supply a resolver - an authenticated call to your own API, a shared cache, a DB read
+     * - to make revocation enforceable without a confidential client.
+     *
+     * Return `null`/`undefined` when the version cannot be determined; the check then fails
+     * closed rather than assuming the session is still good.
      */
     resolveSessionVersion?: (userId: string) => Promise<number | null | undefined> | number | null | undefined;
 }
@@ -72,7 +105,11 @@ export interface JwksOptions {
 }
 
 /**
- * Standard OIDC Discovery Document containing server endpoints and metadata.
+ * The subset of OIDC discovery metadata this SDK reads.
+ *
+ * The five non-optional fields are required: discovery fails if the provider omits any of
+ * them. The optional ones each unlock a feature - no `end_session_endpoint` means no
+ * RP-initiated logout, no `introspection_endpoint` means no live revocation checks.
  */
 export interface DiscoveryDocument {
     /** The issuer URL of the identity provider. */
@@ -99,9 +136,7 @@ export interface DiscoveryDocument {
     code_challenge_methods_supported?: string[];
 }
 
-/**
- * Response received from the token endpoint after a successful exchange or refresh.
- */
+/** A successful token endpoint response, as returned by a code exchange or a refresh. */
 export interface TokenResponse {
     /** The access token for authorizing API requests. */
     access_token: string;
@@ -117,10 +152,20 @@ export interface TokenResponse {
     scope?: string;
 }
 
-/** Roles the identity provider is known to issue. */
+/**
+ * The roles this SDK models.
+ *
+ * Deliberately a closed set: a `role` claim arriving from the network is narrowed against
+ * {@link USER_ROLES} rather than asserted, so a value the SDK does not model throws instead
+ * of being quietly treated as a known one.
+ *
+ * This is the SDK's one hardcoded assumption about the provider's vocabulary. A provider
+ * that issues other roles needs this union and {@link USER_ROLES} widened together - see
+ * "Roles" in the repository README. Everything else, `amr` included, compares plain strings.
+ */
 export type UserRole = 'admin' | 'user';
 
-/** The roles {@link UserRole} accepts, for runtime validation. */
+/** The runtime counterpart of {@link UserRole}, used to validate the claim at the trust boundary. */
 export const USER_ROLES: readonly UserRole[] = ['admin', 'user'];
 
 /**
@@ -248,8 +293,9 @@ export interface AccessTokenClaims {
 /**
  * An RFC 7662 token introspection response.
  *
- * The Wilsoon provider adds `role`, `amr` and - the reason to call it - the **live**
- * `session_version`, so a "sign out everywhere" can be honoured before a token's own expiry.
+ * Beyond the RFC's own fields, the reference provider adds `role`, `amr` and - the reason
+ * to call it at all - the **live** `session_version`, so a "sign out everywhere" is honoured
+ * before the token's own expiry rather than after it.
  */
 export interface IntrospectionResponse {
     /** Whether the provider considers the token usable right now. */

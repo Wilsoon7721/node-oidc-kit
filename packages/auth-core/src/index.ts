@@ -39,16 +39,16 @@ import {
 import { generateNonce, generatePKCE, generateState, normalizeIssuer, timingSafeEqual } from "./utils";
 
 /**
- * The core client for interacting with the Wilsoon Identity platform.
- * Provides methods for OIDC discovery, authorization URL generation,
- * token exchange, verification, and user profile management.
+ * The names the SDK reads and writes through {@link AuthStorage}.
  *
- * Authorization decisions must be based on {@link AuthClient.verifyIdToken} (or
- * {@link AuthClient.verifyAccessToken} on a resource server). Those are the only methods
- * that check a signature against the provider's published keys.
+ * Exported because a storage adapter usually needs to tell them apart - the token blob is
+ * long-lived, the other three are single-use and expire in minutes. See
+ * `ServerCookieStorage` in `@wilsoon/auth-next` for that split in practice.
+ *
+ * These are fixed at the SDK level. To put the token blob under a different cookie name,
+ * map it inside your adapter - the Next.js middleware's `cookieName` option does exactly
+ * that - rather than expecting the client to emit a different key.
  */
-
-/** Storage keys the SDK owns. Exported so consumers can mirror them in their own stores. */
 export const STORAGE_KEYS = {
   /** The persisted token response. */
   tokens: 'wilsoon_id_tokens',
@@ -98,6 +98,20 @@ const asNumber = (value: unknown): number | undefined => {
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
+/**
+ * An OIDC relying party: discovery, authorization requests, code exchange, token
+ * verification and profile lookup for one registered client.
+ *
+ * Framework-agnostic by construction - it depends on `fetch`, Web Crypto and an
+ * {@link AuthStorage} adapter and nothing else - so the same client works in a browser, in
+ * Node, and on an edge runtime.
+ *
+ * One rule governs everything below: authorization decisions must come from
+ * {@link AuthClient.verifyIdToken}, {@link AuthClient.verifyAccessToken} or
+ * {@link AuthClient.verifyPlatformSession}. Those are the only methods that check a
+ * signature against the provider's published keys. Every `*Unsafe` method returns
+ * attacker-controlled data by design.
+ */
 export class AuthClient {
   private discoveryCache: DiscoveryDocument | null = null;
   private storage: AuthStorage;
@@ -106,11 +120,9 @@ export class AuthClient {
   private sessionCache = new Map<string, { user: AuthenticatedUser; expiresAt: number }>();
 
   /**
-   * Initializes a new instance of the AuthClient.
-   * @param config The configuration object containing client credentials and issuer details.
-   * @param storage An optional custom storage implementation. Defaults to browser
-   * localStorage in the browser. On the server, storage-backed operations throw a
-   * descriptive {@link StorageUnavailableError} instead of failing later with a `TypeError`.
+   * @param storage Defaults to `localStorage` in the browser. On the server there is no
+   * safe default, so storage-backed calls throw a {@link StorageUnavailableError} naming
+   * the operation instead of failing later with a `TypeError` - pass an adapter.
    * @throws {AuthError} If required configuration is missing or the issuer is not a URL.
    */
   constructor(private config: AuthConfig, storage?: AuthStorage) {
@@ -134,27 +146,22 @@ export class AuthClient {
     this.keySet = new RemoteKeySet(config.jwks);
   }
 
-  /**
-   * Reports whether this client can read and write persistent state.
-   * @returns True when a usable storage implementation is configured.
-   */
+  /** Whether this client has a usable storage implementation. */
   public hasStorage(): boolean {
     return isUsableStorage(this.storage);
   }
 
-  /**
-   * Persists the OIDC token response to the configured storage.
-   * @param tokens The token response object to save.
-   * @throws {StorageUnavailableError} If no storage implementation is available.
-   */
+  /** @throws {StorageUnavailableError} If no storage implementation is available. */
   public saveTokens(tokens: TokenResponse): void {
     this.storage.setItem(TOKEN_KEY, JSON.stringify(tokens));
   }
 
   /**
-   * Retrieves the persisted OIDC token response from storage.
-   * Tolerates the URI-encoded form the identity provider writes into its cookie.
-   * @returns The stored TokenResponse or null if none is found or it cannot be parsed.
+   * Reads the persisted token response, or `null` if there is none or it is unusable.
+   *
+   * Never throws on a malformed value: a corrupt or truncated cookie should log the user
+   * out, not crash the request. Also tolerates a URI-encoded blob, which is how a provider
+   * that writes the cookie itself typically stores it.
    */
   public getStoredTokens(): TokenResponse | null {
     const raw = this.readStorage(TOKEN_KEY);
@@ -181,9 +188,11 @@ export class AuthClient {
   }
 
   /**
-   * Clears all authentication-related data from the configured storage.
-   * This includes tokens, security state, PKCE verifiers and the ID token nonce.
-   * No-ops when no storage implementation is available.
+   * Removes the tokens and the transient `state`/`nonce`/verifier entries. No-ops when no
+   * storage is available.
+   *
+   * Local state only - this does not end the session at the identity provider. Use
+   * {@link AuthClient.getLogoutUrl} for that.
    */
   public clearStorage(): void {
     if (!this.hasStorage()) return;
@@ -193,12 +202,10 @@ export class AuthClient {
   }
 
   /**
-   * Retrieves the OIDC discovery document from the identity provider.
-   * Results are cached internally after the first successful request.
-   * @returns A promise that resolves to the OIDC Discovery Document.
-   * @throws {DiscoveryError} If the discovery document cannot be fetched or is incomplete.
-   * @throws {IssuerMismatchError} If the advertised issuer is not the configured issuer.
-   * @private
+   * Fetches `/.well-known/openid-configuration`, cached for the life of the client.
+   *
+   * @throws {DiscoveryError} If the document cannot be fetched or lacks a required endpoint.
+   * @throws {IssuerMismatchError} If the advertised issuer is not the configured one.
    */
   private async getEndpoints(): Promise<DiscoveryDocument> {
     if (this.discoveryCache) return this.discoveryCache;
@@ -269,10 +276,11 @@ export class AuthClient {
 
   /**
    * Narrows a raw `role` claim to {@link UserRole} instead of asserting it.
-   * @param value The raw claim value.
-   * @returns The validated role, defaulting to the least-privileged role when absent.
-   * @throws {ClaimValidationError} If the provider emitted a role the SDK does not model.
-   * @private
+   *
+   * Absent means least-privileged (`'user'`); unrecognised throws, because silently mapping
+   * an unknown role onto a known one is how a privilege escalation gets shipped.
+   *
+   * @throws {ClaimValidationError} If the provider emitted a role outside {@link USER_ROLES}.
    */
   private toRole(value: unknown): UserRole {
     const raw = asString(value);
@@ -285,13 +293,7 @@ export class AuthClient {
     );
   }
 
-  /**
-   * Maps a userinfo response to a profile.
-   * @param raw The raw payload received from the OIDC userinfo endpoint.
-   * @returns A profile with display attributes only.
-   * @throws {ClaimValidationError} If the response has no subject identifier.
-   * @private
-   */
+  /** @throws {ClaimValidationError} If the userinfo response carries no subject identifier. */
   private toProfileUser(raw: unknown): ProfileUser {
     if (!isRecord(raw)) throw new ClaimValidationError('The userinfo endpoint returned an unexpected payload.');
 
@@ -308,11 +310,10 @@ export class AuthClient {
   }
 
   /**
-   * Maps verified ID token claims to an authenticated identity.
-   * @param claims Claims that have already passed signature, issuer, audience and expiry checks.
-   * @returns The authenticated user.
-   * @throws {ClaimValidationError} If a required claim is missing or a role is unrecognised.
-   * @private
+   * Maps claims that have already passed signature, issuer, audience and expiry checks onto
+   * {@link AuthenticatedUser}.
+   *
+   * @throws {ClaimValidationError} If a required claim is missing or the role is unrecognised.
    */
   private toAuthenticatedUser(claims: Record<string, unknown>): AuthenticatedUser {
     // The token endpoint spreads identity claims flat; the documented example nests them
@@ -345,12 +346,7 @@ export class AuthClient {
     };
   }
 
-  /**
-   * Maps decoded-but-unverified claims to the legacy user shape.
-   * @param claims Raw claims from an unverified token.
-   * @returns The unverified user shape.
-   * @private
-   */
+  /** Maps decoded-but-unverified claims onto the legacy user shape. */
   private toUnverifiedUser(claims: Record<string, unknown>): UnverifiedUser {
     const fields = isRecord(claims.oidc_fields) ? claims.oidc_fields : claims;
 
@@ -511,12 +507,15 @@ export class AuthClient {
   }
 
   /**
-   * Exchanges an authorization code for OIDC tokens (access, ID, and refresh tokens).
-   * @param code The authorization code received from the callback redirect.
-   * @param codeVerifier The PKCE code verifier used when generating the initial authorize URL.
-   * @returns A promise that resolves to the full OIDC Token Response.
-   * @throws {TokenExchangeError} If the code exchange fails.
-   * @throws {DiscoveryError} If the OIDC discovery process fails.
+   * Exchanges an authorization code for tokens.
+   *
+   * Prefer {@link AuthClient.handleCallback}, which also validates `state`, verifies the
+   * returned ID token and clears the transient request state. Call this directly only when
+   * you are driving those steps yourself.
+   *
+   * @param codeVerifier The PKCE verifier from the {@link AuthClient.createAuthorizeUrl} call
+   * that started this login.
+   * @throws {TokenExchangeError} If the exchange fails.
    */
   public async exchangeCodeForToken(code: string, codeVerifier: string): Promise<TokenResponse> {
     if (!asString(code)) throw new AuthError('No authorization code was provided.', 'INVALID_REQUEST');
@@ -557,11 +556,8 @@ export class AuthClient {
    * `amr` or `session_version`. Use {@link AuthClient.verifyIdToken} when you need to
    * authorize.
    *
-   * @param accessToken A valid OIDC access token.
-   * @returns A promise that resolves to the user's profile.
    * @throws {ClaimValidationError} If an ID token was passed instead of an access token.
-   * @throws {UserInfoError} If the user information cannot be retrieved.
-   * @throws {DiscoveryError} If the OIDC discovery process fails.
+   * @throws {UserInfoError} If the profile cannot be retrieved.
    */
   public async getUser(accessToken: string): Promise<ProfileUser> {
     if (!asString(accessToken)) throw new NoTokenError('No access token was provided.');
@@ -580,16 +576,19 @@ export class AuthClient {
   }
 
   /**
-   * Hydrates the current session by calling the userinfo endpoint with credentials.
-   * The browser automatically attaches the HttpOnly `wilsoon_id_tokens` cookie.
-   * The server reads the cookie, extracts and validates the access token,
-   * and returns the user profile.
+   * Restores browser session state when the tokens live in an HttpOnly cookie.
    *
-   * Use this method on page load to restore authentication state when tokens
-   * are stored in HttpOnly cookies and are invisible to JavaScript. The result carries
-   * display claims only and is **not** sufficient for an authorization decision.
+   * Calls the userinfo endpoint with `credentials: 'include'` and no `Authorization`
+   * header: the browser attaches the session cookie itself, and the provider answers from
+   * it. This is the only way a browser can learn who it is signed in as when - correctly -
+   * it cannot read the token.
    *
-   * @returns A promise that resolves to the user's profile, or null if no valid session exists.
+   * The result carries display claims only and is **not** sufficient to authorize on. It
+   * requires a provider whose userinfo endpoint accepts a cookie-authenticated request and
+   * sends CORS credentials headers for your origin.
+   *
+   * @returns The profile, or `null` if there is no usable session. Never throws - a failed
+   * hydration is an ordinary "signed out", not an error.
    */
   public async hydrateSession(): Promise<ProfileUser | null> {
     try {
@@ -608,12 +607,13 @@ export class AuthClient {
   }
 
   /**
-   * Generates the standardized logout URL for the Wilsoon Identity platform.
-   * @param idToken The user's ID Token from their session.
-   * @param postLogoutRedirectUri Where the user should be sent after logout.
-   * @returns A promise that resolves to the generated logout URL.
-   * @throws {LogoutError} If the logout URL cannot be generated.
-   * @throws {DiscoveryError} If the OIDC discovery process fails.
+   * Builds an RP-initiated logout URL from the provider's advertised
+   * `end_session_endpoint`. Redirect the user agent to it to end the session at the
+   * provider, then clear your own storage.
+   *
+   * @param idToken Sent as `id_token_hint`, so the provider knows which session to end.
+   * @param postLogoutRedirectUri Must be registered with the provider, or it will be ignored.
+   * @throws {LogoutError} If the provider advertises no `end_session_endpoint`.
    */
   public async getLogoutUrl(idToken: string, postLogoutRedirectUri: string): Promise<string> {
     const { end_session_endpoint } = await this.getEndpoints();
@@ -637,11 +637,8 @@ export class AuthClient {
    * The rotated token response is written back to storage when the SDK is already managing
    * the stored tokens, so the new refresh token is not lost.
    *
-   * @param refreshToken The refresh token obtained from a previous token exchange.
    * @param options Set `persist` to force or suppress writing the result to storage.
-   * @returns A promise that resolves to a new Token Response.
-   * @throws {TokenRefreshError} If the token refresh fails.
-   * @throws {DiscoveryError} If the OIDC discovery process fails.
+   * @throws {TokenRefreshError} If the refresh fails.
    */
   public async refreshAccessToken(refreshToken: string, options: { persist?: boolean } = {}): Promise<TokenResponse> {
     if (!asString(refreshToken)) throw new NoTokenError('No refresh token was provided.');
@@ -693,7 +690,6 @@ export class AuthClient {
    * is this client - so an ID token minted for another application is rejected - that the
    * token has not expired, and that the `nonce` matches the authorization request.
    *
-   * @param idToken The ID token to verify.
    * @param options The nonce to require, and an optional maximum authentication age.
    * @returns The verified user, safe to authorize on.
    * @throws {TokenVerificationError} If the signature, algorithm, issuer, audience or expiry fails.
@@ -732,8 +728,8 @@ export class AuthClient {
   /**
    * Verifies an access token presented to a resource server.
    *
-   * The platform issues access tokens with a shared audience, so the accepted audience
-   * must be pinned explicitly - either per call or via {@link AuthConfig.apiAudience}.
+   * The provider may issue access tokens with an audience shared across applications, so
+   * the accepted audience must be pinned explicitly - either per call or via {@link AuthConfig.apiAudience}.
    * Verifying only the signature would let a token obtained by any client be replayed
    * against any resource server.
    *
@@ -831,6 +827,7 @@ export class AuthClient {
    * @returns The unverified claims in the SDK's user shape.
    * @throws {NoTokenError} If the ID token is invalid or cannot be parsed.
    */
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- frozen 1.x name; the `Unsafe` suffix the rule wants is what decodeIdTokenUnsafe() provides.
   public parseIdToken(idToken: string): UnverifiedUser {
     warnOnce(
       'parseIdToken',
@@ -842,11 +839,12 @@ export class AuthClient {
   }
 
   /**
-   * Validates that the state returned from the IdP matches the locally stored state.
-   * This prevents CSRF attacks. The comparison is timing-safe.
-   * @param returnedState The state returned from the IdP.
-   * @param storedState The state stored in the application.
-   * @throws {StateMismatchError} If either value is missing or they do not match.
+   * Timing-safe CSRF check on the callback's `state`. An empty value on either side fails.
+   *
+   * {@link AuthClient.handleCallback} already does this; call it directly only when driving
+   * the callback yourself.
+   *
+   * @throws {StateMismatchError} If either value is missing or they differ.
    */
   public validateState(returnedState: string, storedState: string): void {
     if (!timingSafeEqual(returnedState || '', storedState || '')) throw new StateMismatchError();
@@ -861,9 +859,8 @@ export class AuthClient {
    * Fails closed - a token that cannot be parsed, or that carries no `exp`, is reported as
    * expired rather than valid forever.
    *
-   * @param token The JWT string.
-   * @param offsetSeconds Buffer time (default 60s) to refresh before actual expiry.
-   * @returns True when the token should be treated as expired.
+   * @param offsetSeconds How far ahead of the real expiry to report the token as due
+   * (default 60s), so a refresh has time to complete.
    */
   public isTokenNearExpiry(token: string, offsetSeconds = 60): boolean {
     try {
@@ -895,7 +892,7 @@ export class AuthClient {
   }
 
   /**
-   * Resolves the verified user behind a token response, whichever way the platform is wired.
+   * Resolves the verified user behind a token response, whichever way the deployment is wired.
    *
    * Two shapes, in this order:
    *
@@ -940,10 +937,7 @@ export class AuthClient {
     throw new NoTokenError('The session holds no tokens to verify.');
   }
 
-  /**
-   * Whether a token claims this client's audience. A routing hint, never a trust decision.
-   * @private
-   */
+  /** Whether a token *claims* this client's audience. A routing hint, never a trust decision. */
   private isAddressedToThisClient(token: string): boolean {
     try {
       const payload = decodeTokenPayloadUnsafe(token);
@@ -956,7 +950,7 @@ export class AuthClient {
 
   /**
    * Resolves a verified session from a **platform access token** - the token that rides in the
-   * shared `.wilsoon.dev` session cookie and is addressed to the platform API audience rather
+   * shared, domain-wide session cookie and is addressed to the platform API audience rather
    * than to any one application.
    *
    * Use this when several first-party services share one login. Each service holds a different
@@ -1109,7 +1103,6 @@ export class AuthClient {
    *
    * Fails closed: it throws rather than assuming the session is still current.
    *
-   * @param user A verified user carrying a `sessionVersion`.
    * @param options The token to introspect, when relying on introspection.
    * @returns True when the token's session version is the current one.
    * @throws {SessionCheckUnavailableError} If neither route is available, the token asserts
@@ -1154,7 +1147,6 @@ export class AuthClient {
    *
    * Uses an unverified decode, which is safe here because the result is only ever used to
    * reject: an ID token carries this client's ID as its audience and no `scope` claim.
-   * @private
    */
   private assertNotIdToken(token: string): void {
     let payload: Record<string, unknown>;

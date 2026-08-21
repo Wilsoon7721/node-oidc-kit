@@ -1,0 +1,53 @@
+name: Bug or issue
+description: Something in the SDK isn't behaving the way the docs say it should.
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Found a security issue? Please use [private reporting](../../security/advisories/new)
+        instead of a public issue - see [SECURITY.md](../../blob/main/SECURITY.md).
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      options:
+        - "@wilsoon/auth-core"
+        - "@wilsoon/auth-react"
+        - "@wilsoon/auth-next"
+        - Not sure / repo tooling (build, CI, docs)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The exact version installed, from `package.json` or `npm ls @wilsoon/auth-core`.
+      placeholder: "2.0.1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: issue
+    attributes:
+      label: What's happening
+      description: What you expected, what happened instead, and any error message or stack trace.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: >
+        Optional, but the fastest way to get this fixed. A minimal code sample is ideal -
+        the test suite includes a fake in-process IdP
+        (`packages/auth-core/test/fake-idp.ts`) if you need a stand-in provider.
+      placeholder: |
+        1. Configure a client with...
+        2. Call...
+        3. Observe...
+    validations:
+      required: false

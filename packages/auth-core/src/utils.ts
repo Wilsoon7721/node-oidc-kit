@@ -36,10 +36,7 @@ export function getWebCrypto(): Crypto {
 }
 
 /**
- * Generates a high-entropy random string for security purposes.
- * Uses the Web Crypto API to ensure cryptographic strength.
- * @param length The desired length of the returned hex string.
- * @returns A cryptographically secure random string.
+ * A cryptographically random hex string of `length` characters.
  * @throws {CryptoUnavailableError} If the runtime has no Web Crypto API.
  */
 export function generateRandomString(length: number): string {
@@ -48,28 +45,22 @@ export function generateRandomString(length: number): string {
     return toHex(array).slice(0, length);
 }
 
-/**
- * Generates a random state string to prevent CSRF attacks in OIDC flows.
- * @returns A 32-character random string.
- */
+/** A 32-character `state` value: the CSRF binding between an authorize request and its callback. */
 export function generateState(): string {
     return generateRandomString(32);
 }
 
 /**
- * Generates a random nonce, which binds an ID token to the authorization request that
- * asked for it and is the OIDC-mandated protection against ID token replay.
- * @returns A 32-character random string.
+ * A 32-character `nonce`, which binds an ID token to the authorization request that asked
+ * for it. This is the OIDC-mandated protection against ID token replay.
  */
 export function generateNonce(): string {
     return generateRandomString(32);
 }
 
 /**
- * Generates a PKCE code verifier string.
- * 96 random bytes base64url-encode to exactly 128 characters, the maximum length
- * RFC 7636 allows.
- * @returns A base64url-encoded random string.
+ * A PKCE code verifier. 96 random bytes base64url-encode to exactly 128 characters, the
+ * maximum RFC 7636 allows.
  */
 export function generateCodeVerifier(): string {
     const array = new Uint8Array(96);
@@ -78,9 +69,7 @@ export function generateCodeVerifier(): string {
 }
 
 /**
- * Generates a PKCE code challenge by hashing the verifier with SHA-256.
- * @param codeVerifier The original verifier string to hash.
- * @returns A promise resolving to the base64url-encoded SHA-256 hash.
+ * The `S256` PKCE challenge for a verifier: its base64url-encoded SHA-256 hash.
  * @throws {CryptoUnavailableError} If the runtime has no Web Crypto subtle API.
  */
 export async function generateCodeChallenge(codeVerifier: string): Promise<string> {
@@ -92,10 +81,7 @@ export async function generateCodeChallenge(codeVerifier: string): Promise<strin
     return toBase64Url(new Uint8Array(hashBuffer));
 }
 
-/**
- * Helper to generate both the PKCE verifier and its corresponding challenge.
- * @returns A promise resolving to an object containing both the verifier and challenge.
- */
+/** Generates a PKCE verifier and its matching `S256` challenge. */
 export async function generatePKCE() {
     const codeVerifier = generateCodeVerifier();
     const codeChallenge = await generateCodeChallenge(codeVerifier);
@@ -103,11 +89,11 @@ export async function generatePKCE() {
 }
 
 /**
- * Compares two strings in constant time relative to their length, so that a mismatched
- * `state` or `nonce` cannot be discovered by timing the comparison.
- * @param a First value.
- * @param b Second value.
- * @returns True when both values are non-empty and equal.
+ * Compares two strings without leaking the position of the first difference through timing,
+ * so a `state` or `nonce` cannot be guessed byte by byte.
+ *
+ * Returns false when either value is empty: an absent `state` must never compare equal to
+ * an absent expectation.
  */
 export function timingSafeEqual(a: string, b: string): boolean {
     if (typeof a !== 'string' || typeof b !== 'string' || a.length === 0 || b.length === 0) return false;

@@ -1,6 +1,10 @@
 # @wilsoon/auth-next
 
-Next.js integration for the Wilsoon Identity platform. Provides seamless utilities for Server Components, Route Handlers, and Edge Middleware in Next.js 13+ App Router.
+OpenID Connect for the Next.js App Router: verified sessions in Server Components and Route
+Handlers, plus route-protecting Edge Middleware that refreshes expiring tokens.
+
+Part of the [Wilsoon Node OIDC Kit](https://github.com/Wilsoon7721/node-oidc-kit) - an OpenID Connect relying party for TypeScript.
+Siblings: [`@wilsoon/auth-core`](https://www.npmjs.com/package/@wilsoon/auth-core) · [`@wilsoon/auth-react`](https://www.npmjs.com/package/@wilsoon/auth-react) · **`@wilsoon/auth-next`**.
 
 ## Features
 
@@ -16,7 +20,7 @@ npm install @wilsoon/auth-next @wilsoon/auth-core @wilsoon/auth-react
 ```
 
 Full end-to-end recipes, migration notes and a troubleshooting table live in the
-[integration guide](../../INTEGRATION.md).
+[integration guide](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/INTEGRATION.md).
 
 ## Basic Usage
 
@@ -27,8 +31,8 @@ Keep one config object and share it across middleware, server helpers and the pr
 import type { AuthConfig } from "@wilsoon/auth-core";
 
 export const authConfig: AuthConfig = {
-  clientId: process.env.WILSOON_CLIENT_ID!,
-  issuer: "https://id.wilsoon.dev",
+  clientId: process.env.OIDC_CLIENT_ID!,
+  issuer: "https://id.example.com",
   redirectUri: "https://app.example.com/callback",
 };
 ```
@@ -127,3 +131,7 @@ Client state is for rendering only - the server helpers above are what gate acce
 ## Environment
 
 Designed specifically for Next.js 13+. `ServerCookieStorage` reads cookies anywhere `cookies()` works and writes them in Route Handlers, Server Actions and middleware; in a Server Component, where Next.js forbids writes, it throws `StorageUnavailableError` explaining where to move the call.
+
+## License
+
+[MIT](./LICENSE) - free use, forking and redistribution, with no warranty of any kind.

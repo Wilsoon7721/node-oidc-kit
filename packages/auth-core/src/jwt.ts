@@ -3,10 +3,15 @@ import { NoTokenError, TokenVerificationError } from './errors';
 import type { JwksOptions } from './types';
 
 /**
- * Signature algorithms the SDK will accept.
+ * The only signature algorithms this SDK will accept.
  *
- * Without an explicit allowlist a verifier can be talked into accepting `alg: "none"` or an HMAC-confusion token where the attacker supplies the key.
- * The identity provider signs both ID tokens and access tokens with RS256 and advertises only RS256 in `id_token_signing_alg_values_supported`.
+ * An allowlist is not optional: without one, a verifier can be talked into accepting
+ * `alg: "none"`, or an HMAC-confusion token where the attacker supplies the key that
+ * verifies it.
+ *
+ * RS256 only, because that is what the reference provider signs with and advertises in
+ * `id_token_signing_alg_values_supported`. A provider that signs with ES256 or EdDSA needs
+ * this list widened - see the algorithm note in the repository README first.
  */
 export const ALLOWED_ALGORITHMS = ['RS256'] as const;
 
@@ -38,12 +43,7 @@ const base64UrlToBytes = (segment: string): Uint8Array => {
     return new Uint8Array(Buffer.from(padded, 'base64'));
 };
 
-/**
- * Splits a compact JWS and returns its three segments.
- * @param token The compact serialization to split.
- * @returns The header, payload and signature segments.
- * @throws {NoTokenError} If the value is not a three-part compact JWS.
- */
+/** @throws {NoTokenError} If the value is not a three-part compact JWS. */
 export function splitJwt(token: string): { header: string; payload: string; signature: string } {
     if (typeof token !== 'string' || token.length === 0) throw new NoTokenError('No token was provided.');
 
@@ -54,12 +54,8 @@ export function splitJwt(token: string): { header: string; payload: string; sign
     return { header: parts[0], payload: parts[1], signature: parts[2] };
 }
 
-/**
- * Decodes a JWT segment's JSON **without verifying anything**.
- * @param segment A base64url-encoded JWT segment.
- * @returns The parsed JSON object.
- */
-function decodeSegment(segment: string): Record<string, unknown> {
+/** Decodes one base64url JWT segment's JSON. Verifies nothing. */
+function decodeSegmentUnsafe(segment: string): Record<string, unknown> {
     const json = new TextDecoder().decode(base64UrlToBytes(segment));
     const parsed = JSON.parse(json);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Segment is not a JSON object.');
@@ -73,29 +69,27 @@ function decodeSegment(segment: string): Record<string, unknown> {
  * signature. Use it for display, diagnostics and scheduling hints only, and never to
  * decide what a caller is allowed to do.
  *
- * @param token The JWT to decode.
- * @returns The raw claims.
  * @throws {NoTokenError} If the token cannot be decoded.
  */
 export function decodeTokenPayloadUnsafe(token: string): Record<string, unknown> {
     const { payload } = splitJwt(token);
     try {
-        return decodeSegment(payload);
+        return decodeSegmentUnsafe(payload);
     } catch (error) {
         throw new NoTokenError('Failed to decode the token payload.');
     }
 }
 
 /**
- * Decodes a JWT's protected header **without verifying anything**.
- * @param token The JWT to decode.
- * @returns The raw header parameters.
+ * Decodes a JWT's protected header **without verifying anything**. For diagnostics - in
+ * particular, reading `kid` and `alg` when a verification failure needs explaining.
+ *
  * @throws {NoTokenError} If the header cannot be decoded.
  */
 export function decodeTokenHeaderUnsafe(token: string): Record<string, unknown> {
     const { header } = splitJwt(token);
     try {
-        return decodeSegment(header);
+        return decodeSegmentUnsafe(header);
     } catch (error) {
         throw new NoTokenError('Failed to decode the token header.');
     }
@@ -104,11 +98,16 @@ export function decodeTokenHeaderUnsafe(token: string): Record<string, unknown> 
 /**
  * A cached remote JSON Web Key Set.
  *
- * `createRemoteJWKSet` handles `kid` selection and caching. This wrapper adds recovery for
- * a provider that rotates its signing key **without** changing the `kid` (the Wilsoon IdP
- * currently serves a hardcoded `kid`): when a signature fails to verify, the cached key set
- * is dropped once - at most every {@link ROTATION_RETRY_COOLDOWN_MS} - and the verification retried, 
- * so a rotation costs one retry instead of failing every request until the cache expires.
+ * `createRemoteJWKSet` already handles `kid` selection and caching. This wrapper adds one
+ * thing on top: recovery from a provider that rotates its signing key **without** changing
+ * the `kid` - which the reference provider does, since it serves a fixed `kid`.
+ *
+ * Normally a rotation is invisible: the new key arrives under a new `kid` and jose refetches
+ * on the miss. With a fixed `kid` the cached key simply stops verifying, and every request
+ * fails until the cache ages out. So on a signature failure the key set is dropped once - at
+ * most every {@link ROTATION_RETRY_COOLDOWN_MS} - and verification retried, making a rotation
+ * cost one extra fetch instead of ten minutes of outage. The cooldown is what stops replayed
+ * garbage signatures from turning into a fetch storm against the provider's JWKS endpoint.
  */
 export class RemoteKeySet {
     private keySet?: ReturnType<typeof createRemoteJWKSet>;
@@ -117,11 +116,7 @@ export class RemoteKeySet {
 
     constructor(private options: JwksOptions = {}) { }
 
-    /**
-     * Returns the key-set resolver for a JWKS URI, creating it on first use.
-     * @param jwksUri The provider's `jwks_uri`.
-     * @returns A jose key resolver.
-     */
+    /** The resolver for this JWKS URI, created on first use and reused after. */
     resolver(jwksUri: string): ReturnType<typeof createRemoteJWKSet> {
         if (!this.keySet || this.keySetUri !== jwksUri) {
             this.keySetUri = jwksUri;
@@ -136,7 +131,7 @@ export class RemoteKeySet {
 
     /**
      * Drops the cached key set so the next verification refetches it.
-     * @returns True if the cache was dropped, false if the cooldown is still active.
+     * @returns False when the cooldown is still active and nothing was dropped.
      */
     invalidate(): boolean {
         const now = Date.now();
@@ -198,9 +193,6 @@ export interface VerifyJwtParams {
  * Checks, in one pass: the signature, that the algorithm is one of
  * {@link ALLOWED_ALGORITHMS}, the `iss`, the `aud`, and `exp`/`nbf` (with leeway).
  *
- * @param keySet The cached key set to verify against.
- * @param token The compact JWT.
- * @param params Issuer, audience, JWKS URI and clock tolerance.
  * @returns The verified claims.
  * @throws {NoTokenError} If the token is not a compact JWS.
  * @throws {TokenVerificationError} If any check fails.

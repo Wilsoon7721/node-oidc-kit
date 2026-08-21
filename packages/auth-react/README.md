@@ -1,6 +1,10 @@
 # @wilsoon/auth-react
 
-React components and hooks for the Wilsoon Identity platform. Provides a convenient context provider and hook to manage authentication state across your React application.
+React context and hooks for OpenID Connect browser sessions - the login redirect, the verified
+callback exchange, and session hydration, behind one provider and one hook.
+
+Part of the [Wilsoon Node OIDC Kit](https://github.com/Wilsoon7721/node-oidc-kit) - an OpenID Connect relying party for TypeScript.
+Siblings: [`@wilsoon/auth-core`](https://www.npmjs.com/package/@wilsoon/auth-core) · **`@wilsoon/auth-react`** · [`@wilsoon/auth-next`](https://www.npmjs.com/package/@wilsoon/auth-next).
 
 ## Features
 
@@ -15,7 +19,7 @@ npm install @wilsoon/auth-react @wilsoon/auth-core
 ```
 
 Full end-to-end recipes, migration notes and a troubleshooting table live in the
-[integration guide](../../INTEGRATION.md).
+[integration guide](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/INTEGRATION.md).
 
 ## Basic Usage
 
@@ -28,7 +32,7 @@ import { AuthProvider } from "@wilsoon/auth-react";
 
 function App({ children }) {
   return (
-    <AuthProvider clientId="your-client-id" issuer="https://id.wilsoon.dev" redirectUri="http://localhost:3000/callback">
+    <AuthProvider clientId="your-client-id" issuer="https://id.example.com" redirectUri="http://localhost:3000/callback">
       {children}
     </AuthProvider>
   );
@@ -89,6 +93,18 @@ TypeScript will not let you read `role` without narrowing on `verified` first, s
 login({ prompt: "reauthenticate", acrValues: ["mfa"] });
 ```
 
+### 5. Refresh is not handled here
+
+The session cookie is `HttpOnly`, so this provider cannot see the refresh token and cannot
+refresh on a timer. Either wrap `fetch` so a `401` from your API triggers
+`client.refreshAccessToken()` and one retry, or refresh server-side with
+[`@wilsoon/auth-next`](https://www.npmjs.com/package/@wilsoon/auth-next)'s middleware.
+
 ## Environment
 
-This package is built for browser environments and React applications. It integrates natively with client-side session management tools.
+React 16+ in a browser. The package ships the `"use client"` directive, so it is safe to import
+from a Next.js App Router tree.
+
+## License
+
+[MIT](./LICENSE) - free use, forking and redistribution, with no warranty of any kind.

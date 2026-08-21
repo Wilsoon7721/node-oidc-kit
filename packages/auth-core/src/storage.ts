@@ -1,64 +1,62 @@
 import { StorageUnavailableError } from './errors';
 
 /**
- * Defines the contract for storage implementations used by the Auth SDK.
- * This abstraction allows for different persistence strategies (e.g., localStorage, sessionStorage, or custom memory storage).
+ * The SDK's only persistence dependency: three synchronous string operations.
+ *
+ * Everything the SDK persists - the token response, plus the single-use `state`, `nonce`
+ * and PKCE verifier - is read and written through this interface under the
+ * `STORAGE_KEYS` names. Supporting a new framework therefore means writing one adapter,
+ * not touching `AuthClient`. Implementations ship for the browser
+ * ({@link BrowserStorage}), for tests and single-process flows ({@link MemoryStorage}),
+ * and for the Next.js cookie store (`ServerCookieStorage` in `@wilsoon/auth-next`).
+ *
+ * The contract an implementation must honour:
+ *
+ * - **Synchronous.** `AuthClient` calls these inline, so an async store (Redis, a
+ *   database) has to be loaded into memory first - see {@link MemoryStorage}.
+ * - **Round-trips values unchanged.** Token blobs are JSON; a store that encodes on write
+ *   must decode on read.
+ * - **A missing key returns `null`,** never `undefined`, and never throws.
+ * - **A write that cannot happen should throw** rather than silently no-op, unless the
+ *   no-op is deliberate (as in the Next.js middleware, where the response owns writes).
+ *
+ * A cookie-backed adapter should also set `HttpOnly`, `Secure` and `SameSite=Lax`. `Lax`
+ * is specifically what lets the `state`/`nonce`/verifier cookies survive the redirect back
+ * from the identity provider; `Strict` drops them and every login fails on state mismatch.
  */
 export interface AuthStorage {
-    /**
-     * Retrieves a value from storage by its key.
-     * @param key The unique identifier for the stored item.
-     * @returns The string value if found, or null if the key does not exist.
-     */
+    /** Returns the stored value, or `null` when the key is absent. */
     getItem(key: string): string | null;
 
-    /**
-     * Persists a value in storage under the specified key.
-     * @param key The unique identifier for the item.
-     * @param value The string value to store.
-     */
+    /** Persists `value` under `key`, overwriting any existing value. */
     setItem(key: string, value: string): void;
 
-    /**
-     * Removes an item from storage by its key.
-     * @param key The unique identifier for the item to remove.
-     */
+    /** Removes `key`. Absent keys are not an error. */
     removeItem(key: string): void;
 }
 
 /**
- * A standard browser-based storage implementation using the Web Storage API.
- * Defaults to localStorage but can be configured to use sessionStorage.
+ * Web Storage API adapter, defaulting to `localStorage`.
+ *
+ * Pass `window.sessionStorage` for the transient login values - `state`, `nonce` and the
+ * PKCE verifier are single-use and scoped to one login attempt in one tab, so
+ * `sessionStorage` expires them for free when the tab closes. This is what
+ * `@wilsoon/auth-react`'s `AuthProvider` does.
+ *
+ * Anything kept here is readable by any script on the page, so it is not a safe home for
+ * tokens on a site that renders untrusted content.
  */
 export class BrowserStorage implements AuthStorage {
-    /**
-     * Initializes a new instance of BrowserStorage.
-     * @param storage The browser Storage object to use (defaults to window.localStorage).
-     */
     constructor(private storage: Storage = window.localStorage) { }
 
-    /**
-     * Retrieves a value from the underlying browser storage.
-     * @param key The key to look up.
-     * @returns The value associated with the key, or null.
-     */
     getItem(key: string): string | null {
         return this.storage.getItem(key);
     }
 
-    /**
-     * Saves a value to the underlying browser storage.
-     * @param key The key to save under.
-     * @param value The value to save.
-     */
     setItem(key: string, value: string): void {
         this.storage.setItem(key, value);
     }
 
-    /**
-     * Removes a value from the underlying browser storage.
-     * @param key The key to remove.
-     */
     removeItem(key: string): void {
         this.storage.removeItem(key);
     }
@@ -76,29 +74,15 @@ export class BrowserStorage implements AuthStorage {
 export class MemoryStorage implements AuthStorage {
     private store = new Map<string, string>();
 
-    /**
-     * Retrieves a value from the in-memory map.
-     * @param key The key to look up.
-     * @returns The value associated with the key, or null.
-     */
     getItem(key: string): string | null {
         const value = this.store.get(key);
         return value === undefined ? null : value;
     }
 
-    /**
-     * Saves a value in the in-memory map.
-     * @param key The key to save under.
-     * @param value The value to save.
-     */
     setItem(key: string, value: string): void {
         this.store.set(key, value);
     }
 
-    /**
-     * Removes a value from the in-memory map.
-     * @param key The key to remove.
-     */
     removeItem(key: string): void {
         this.store.delete(key);
     }
@@ -115,27 +99,20 @@ export class MemoryStorage implements AuthStorage {
  * @internal
  */
 export class UnavailableStorage implements AuthStorage {
-    /** @throws {StorageUnavailableError} Always. */
     getItem(key: string): string | null {
         throw new StorageUnavailableError(`Reading "${key}" from storage`);
     }
 
-    /** @throws {StorageUnavailableError} Always. */
     setItem(key: string): void {
         throw new StorageUnavailableError(`Writing "${key}" to storage`);
     }
 
-    /** @throws {StorageUnavailableError} Always. */
     removeItem(key: string): void {
         throw new StorageUnavailableError(`Removing "${key}" from storage`);
     }
 }
 
-/**
- * Reports whether a storage implementation can actually be used.
- * @param storage The storage instance to check.
- * @returns True when reads and writes will be attempted for real.
- */
+/** Whether reads and writes against this storage will actually be attempted. */
 export function isUsableStorage(storage: AuthStorage | undefined | null): boolean {
     return !!storage
         && !(storage instanceof UnavailableStorage)
