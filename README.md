@@ -1,4 +1,4 @@
-# WilsoonID SDK
+# @wilsoon/auth-core / auth-react / auth-next 
 
 A small, framework-agnostic OpenID Connect **relying party** for TypeScript - the client
 half of OIDC, not the provider. Point it at any conforming issuer, get back a verified
@@ -17,7 +17,9 @@ Three packages, ~3,000 lines of source, one runtime dependency
 ([`jose`](https://github.com/panva/jose)), and no Node-only imports - just `fetch` and Web
 Crypto. It runs in a browser, in Node 18+, and on edge runtimes like Cloudflare Workers.
 
-Full documentation, with more depth than this README, is at
+> This was originally a private repository. I've only decided to publicise it now in v2 as I originally built it to serve my own purposes at [id.wilsoon.dev](https://id.wilsoon.dev), but things have been patched to be more generic since then.  
+
+Full documentation, with slightly more depth than this README, is at
 **[docs.wilsoon.dev/node-oidc-kit](https://docs.wilsoon.dev/node-oidc-kit)**.
 
 - [Why this exists](#why-this-exists)
