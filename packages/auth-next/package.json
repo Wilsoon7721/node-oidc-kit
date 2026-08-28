@@ -1,6 +1,6 @@
 {
   "name": "@wilsoon/auth-next",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "OpenID Connect for the Next.js App Router: verified sessions, middleware and hardened cookie storage",
   "keywords": [
     "oidc",
