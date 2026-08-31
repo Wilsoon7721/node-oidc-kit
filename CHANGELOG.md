@@ -4,9 +4,10 @@ The three original packages (`@wilsoon/auth-core`, `@wilsoon/auth-react`,
 `@wilsoon/auth-next`) are versioned together. `@wilsoon/auth-machine` has no dependency on
 them and is versioned independently, starting at 0.x.
 
-## Unreleased
+## 2.2.0
 
-Three flows past authorization-code-plus-PKCE, and a new package for the last of them.
+Three flows past authorization-code-plus-PKCE, a new package for the last of them, and
+step-up that works against a provider other than the reference one.
 
 ### Added - `@wilsoon/auth-core`
 
@@ -44,7 +45,36 @@ Both changes tighten what is accepted. Neither removes or renames anything.
   separating a proof that one action was authorised from a proof that a user is signed in.
   Real ID tokens never carry `evt`.
 
-### Added - `@wilsoon/auth-machine` 0.1.0
+### Added - step-up, the portable way (`auth-core`, `auth-react`)
+
+`acr_values` alone was not enough to do step-up against a provider other than the reference
+one, and the two additions below are what a stranger's provider actually supports.
+
+- `maxAge` on `createAuthorizeUrl()`, sending OIDC Core's `max_age`. `0` demands a fresh
+  authentication.
+- `readAuthenticationChallenge()`, `buildAuthenticationChallenge()` and `isStepUpChallenge()` -
+  RFC 9470's `WWW-Authenticate` challenge, both the parsing and the emitting half, so a
+  resource server and a client can agree on one header.
+- `createStepUpRequest(challenge)`, turning a challenge into the authorization request that
+  answers it. Only `acr_values` and `max_age` cross over: a `scope` from the same header would
+  let a resource server widen what the client requests on the user's behalf.
+- `requiredAcr` on `verifyIdToken()`, rejecting a token whose `acr` is not one the caller
+  accepts.
+- `maxAge` on `@wilsoon/auth-react`'s `login()`, so a React app can ask how *recent* an
+  authentication must be and not only how strong.
+
+### Changed - machine token detection no longer fails open
+
+`isMachineToken()` recognised only `token_use: "client"`, a vendor claim rather than a
+registered one. Against a provider that does not emit it, every machine token read as a user
+token - the exact confusion the check exists to prevent, failing in the unsafe direction and
+silently.
+
+It now also accepts an RFC 9068 `sub` equal to `client_id`, which holds on any provider
+following that profile, and `AuthConfig.detectMachineToken` overrides both for a provider that
+marks them some other way.
+
+### Added - `@wilsoon/auth-machine` 0.1.0, fixed in 0.1.1
 
 New package, server-only, zero dependencies. Obtains `client_credentials` tokens; the
 grant is a form POST, and the package exists for what surrounds it - single-flight so
@@ -76,7 +106,7 @@ once per process. See [migrating](#migrating-from-1x) below.
   verifies the ID token, clears transient state. Replaces four separate calls.
 - `introspectToken()` and `isSessionCurrent()` - live revocation checks, so "sign out
   everywhere" takes effect before token expiry.
-- `nonce` on every authorization request, generated, persisted and checked by the SDK.
+- `nonce` on every authorization request, generated, persisted and checked by the library.
 - `satisfiesAmr()` / `assertAmr()` and the `AMR` constants, for step-up policies.
 - `hydrateSession()` - restores browser session state when the token cookie is `HttpOnly`.
 - `MemoryStorage`, `UnavailableStorage`, and `ServerCookieStorage` (`@wilsoon/auth-next`).

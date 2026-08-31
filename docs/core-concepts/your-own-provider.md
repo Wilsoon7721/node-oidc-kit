@@ -6,10 +6,20 @@ order: 4
 
 Discovery means no endpoint URLs are hardcoded, and `amr` policies compare plain strings -
 see [Installation](/getting-started/installation) for the endpoints your provider needs to
-offer. Past that, being honest about what's left: five things are still specific to one
+offer. Past that, being honest about what's left: six things are still specific to one
 reference provider, in order of how likely each is to matter to you.
 
-## 1. Roles are a closed set
+## 1. Method escalation is an extension, not a standard
+
+`reauthorize()` and the `/api/escalate` endpoints behind it exist only on the reference
+provider. There is no OIDC or RFC equivalent, and nothing in discovery to look for, so
+pointing it elsewhere finds no endpoint to call.
+
+Nothing else in the library depends on it. [Step-up](/flows/step-up) covers the same ground with
+`acr_values` and `max_age`, works against any conforming provider, and is what a fork should
+use instead.
+
+## 2. Roles are a closed set
 
 ```ts
 // @wilsoon/auth-core, types.ts
@@ -24,11 +34,11 @@ provider issuing `editor` or `owner` needs both declarations widened together.
 
 {% callout type="note" %}
 This is the one change most forks will need, and it's two lines. It isn't yet
-configurable at runtime through `AuthConfig` - see the SDK's own contributing guide if
+configurable at runtime through `AuthConfig` - see the library's own contributing guide if
 you'd like to change that.
 {% /callout %}
 
-## 2. RS256 only
+## 3. RS256 only
 
 ```ts
 // @wilsoon/auth-core, jwt.ts
@@ -41,20 +51,20 @@ that verifies it. The _contents_ of the list are a choice, though: a provider si
 ES256 or EdDSA needs this widened. Keep it an allowlist; never derive it from the token's
 own header.
 
-## 3. Storage key names
+## 4. Storage key names
 
 `STORAGE_KEYS` uses names like `wilsoon_id_tokens` and `wilsoon_auth_state`. Purely
-cosmetic, and remappable inside your own storage adapter without touching the SDK - see
+cosmetic, and remappable inside your own storage adapter without touching the library - see
 [Storage](/core-concepts/storage).
 
-## 4. One hardcoded logout fallback
+## 5. One hardcoded logout fallback
 
 `AuthProvider`'s `logout()` in `@wilsoon/auth-react` falls back to `${issuer}/api/logout`
 when the session was hydrated from a cookie and there's no `id_token` available to use as
 the `id_token_hint` that `getLogoutUrl()` needs. Every other logout path goes through OIDC
 discovery. Against a different provider, handle that one fallback case in your own code.
 
-## 5. `hydrateSession()` assumes a cookie-friendly userinfo endpoint
+## 6. `hydrateSession()` assumes a cookie-friendly userinfo endpoint
 
 It calls the userinfo endpoint with `credentials: 'include'` and no `Authorization`
 header, so the browser attaches the session cookie itself. That requires a provider that

@@ -1,6 +1,6 @@
 {
   "name": "@wilsoon/auth-machine",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Server-only OAuth 2.0 client_credentials tokens with caching, single-flight and refresh-ahead",
   "keywords": [
     "oauth2",

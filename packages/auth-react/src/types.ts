@@ -48,6 +48,11 @@ export interface LoginOptions {
     prompt?: string;
     /** OIDC `acr_values`, to request a stronger authentication context. */
     acrValues?: string | string[];
+    /**
+     * OIDC `max_age`: the maximum age, in seconds, of the authentication that will be accepted.
+     * `0` demands a fresh one, which is the other half of a step-up request - `acrValues` asks how strong, this asks how recent.
+     */
+    maxAge?: number;
     /** OIDC `login_hint`. */
     loginHint?: string;
 }

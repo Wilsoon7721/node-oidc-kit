@@ -1,4 +1,4 @@
-# Integrating an application - guide for SDK v2.0
+# Integrating an application - guide for library v2.0
 
 For wiring an application up to an OIDC provider with `@wilsoon/auth-core`, `@wilsoon/auth-react`, `@wilsoon/auth-next` or `@wilsoon/auth-machine`.
 
@@ -20,6 +20,7 @@ Read [Is the flow different now?](#is-the-flow-different-now) first if you alrea
 - [Do I have to change every `user.role` check?](#do-i-have-to-change-every-userrole-check)
 - [Authorization: role, amr, step-up](#authorization-role-amr-step-up)
 - [Recipe 6 - CLI sign-in with the device grant](#recipe-6--cli-sign-in-with-the-device-grant)
+- [Recipe 8 - Step-up from a resource server](#recipe-8--step-up-from-a-resource-server)
 - [Recipe 7 - Server-to-server with no user](#recipe-7--server-to-server-with-no-user)
 - [Session revocation](#session-revocation)
 - [Logout](#logout)
@@ -30,7 +31,7 @@ Read [Is the flow different now?](#is-the-flow-different-now) first if you alrea
 
 ## Is the flow different now?
 
-**The protocol flow is identical. The SDK calls you make at three of the steps changed, and
+**The protocol flow is identical. The library calls you make at three of the steps changed, and
 one new parameter is sent.**
 
 Same as before: authorization code + PKCE, the same endpoints, the same redirect to
@@ -600,7 +601,7 @@ export async function getAuthenticatedUser(cookies: AstroCookies, origin: string
       return null;
     }
     try {
-      // The provider rotates refresh tokens; the SDK stores the rotated response itself.
+      // The provider rotates refresh tokens; the library stores the rotated response itself.
       current = await client.refreshAccessToken(tokens.refresh_token);
     } catch {
       client.clearStorage();
@@ -805,8 +806,32 @@ await client.createAuthorizeUrl({ prompt: "reauthenticate", acrValues: ["mfa"] }
 // or in React: login({ prompt: 'reauthenticate', acrValues: ['mfa'] })
 ```
 
-That restarts the login. **Escalation** is the other option: the session survives, the user
-proves one extra thing, and you get back a token proving it happened.
+Two things to add to that. First, `max_age` bounds how _old_ the authentication may be, and
+`max_age=0` demands a fresh one outright:
+
+```ts
+await client.createAuthorizeUrl({ acrValues: ["mfa"], maxAge: 300 });
+```
+
+Second - and this is the part that is easy to miss - **the request is not the guarantee.**
+An authorization server may ignore `acr_values` and `max_age` and still return a perfectly
+valid token describing a weaker login. Check on the way back:
+
+```ts
+const user = await client.verifyIdToken(idToken, {
+  requiredAcr: "urn:wilsoon:acr:passkey",
+  maxAuthAgeSeconds: 300,
+});
+```
+
+If a resource server is the thing demanding it, have it answer `401` with an RFC 9470
+challenge and let the client act on that - see
+[Recipe 8](#recipe-8--step-up-from-a-resource-server), which works against any provider.
+
+**Escalation** is the provider-specific alternative: the session survives, the user proves
+one extra thing, and you get back a token proving it happened. Reach for it when the client
+has no redirect URI, or when you want to ask without showing anything to a user who already
+qualifies.
 
 ```ts
 const result = await client.reauthorize(["passkey", "fido"], true, {
@@ -916,6 +941,62 @@ leaves outstanding tokens valid until they expire.
 
 ---
 
+## Recipe 8 - Step-up from a resource server
+
+The portable way to demand stronger authentication for one action. Nothing here is specific
+to any provider: it is OIDC Core's `acr_values` and `max_age`, plus RFC 9470's challenge
+header.
+
+**On the API**, answer `401` - never `403`. The caller is being told to go and fetch
+something, which is a different statement from being refused.
+
+```ts
+import { buildAuthenticationChallenge, satisfiesAmr, AMR } from "@wilsoon/auth-core";
+
+if (!satisfiesAmr(user, [AMR.FIDO])) {
+  res.setHeader(
+    "WWW-Authenticate",
+    buildAuthenticationChallenge({
+      acrValues: "urn:wilsoon:acr:passkey",
+      maxAge: 300,
+      errorDescription: "A recent passkey assertion is required.",
+    }),
+  );
+  return res.status(401).end();
+}
+```
+
+**In the client**, act on it:
+
+```ts
+import { readAuthenticationChallenge, isStepUpChallenge } from "@wilsoon/auth-core";
+
+const res = await fetch("/api/payouts", { method: "POST", body });
+
+if (res.status === 401) {
+  const challenge = readAuthenticationChallenge(res.headers.get("www-authenticate"));
+
+  if (isStepUpChallenge(challenge)) {
+    const { url } = await client.createStepUpRequest(challenge);
+    return redirect(url); // acr_values and max_age carried across
+  }
+  return redirect("/login"); // an ordinary 401: the token is no good
+}
+```
+
+That `isStepUpChallenge()` branch matters. `insufficient_user_authentication` means the token
+is valid and the user _is_ signed in - sending them through a plain login throws away a good
+session for nothing.
+
+Only `acr_values` and `max_age` are carried from the challenge into the request. A `scope`
+from the same header is parsed but never applied, since a resource server should not be able
+to widen what your client asks for on the user's behalf.
+
+Then verify what came back, with `requiredAcr` and `maxAuthAgeSeconds`. Without that, a
+provider that ignored the request hands you a step-up that only appears to have happened.
+
+---
+
 ## Session revocation
 
 When a user hits "sign out everywhere" (or an admin changes their role), the IdP increments
@@ -974,32 +1055,34 @@ Two things to know:
 
 ## Troubleshooting by error code
 
-| Error / code                                                | What happened                                                                               | Fix                                                                                                                   |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `ISSUER_MISMATCH`                                           | The discovery document advertises a different issuer than you configured                    | Check your `OIDC_ISSUER` variable, or set `expectedIssuer` in your config                                             |
-| `TOKEN_VERIFICATION_FAILED`, message mentions the signature | Forged token, or the IdP rotated keys                                                       | Retry once (the SDK refetches the JWKS itself); if it persists, check `OIDC_PRIVATE_KEY`/`OIDC_PUBLIC_KEY` are a pair |
-| `TOKEN_VERIFICATION_FAILED`, message mentions `aud`         | ID token minted for another `client_id`, or an ID token passed to `verifyAccessToken`       | Verify ID tokens with the client they were issued to; pass `access_token` to API verification                         |
-| `TOKEN_VERIFICATION_FAILED`, message mentions `iss`         | Token from a different IdP deployment                                                       | Align `issuer` / `OIDC_ISSUER` between app and IdP                                                                    |
-| `TOKEN_VERIFICATION_FAILED` - "Token has expired"           | Clock skew or a genuinely old token                                                         | Check server clocks; raise `clockToleranceSeconds` only for real skew                                                 |
-| `STATE_MISMATCH`                                            | `state` missing or different - often the transient cookie was lost                          | Set the cookie's key to be `SameSite=Lax` (not `Strict`), correct `path`, and don't start multiple logins in parallel |
-| `NONCE_MISMATCH`                                            | The ID token was not bound to this authorization request                                    | Make sure the same client instance/storage handles authorize and callback and don't replay a callback URL             |
-| `INVALID_CALLBACK`                                          | No `code`, or the PKCE verifier is gone                                                     | The login attempt expired (10 min) - start again from your login route                                                |
-| `AUTHORIZATION_RESPONSE_ERROR`                              | The IdP returned `?error=` (e.g. `access_denied`)                                           | Expected when a user declines consent; send them back to your login page                                              |
-| `STORAGE_UNAVAILABLE`                                       | A storage-backed call with no usable storage, or a cookie write in a Server Component       | Pass a storage implementation; move cookie writes into a Route Handler, Server Action or middleware                   |
-| `CLAIM_INVALID` - "unrecognised role"                       | The IdP issued a role this SDK version doesn't model                                        | The only valid roles in the original version is `user` and `admin`, do map it yourself if needed                      |
-| `SESSION_CHECK_UNAVAILABLE`                                 | `isSessionCurrent()` had no way to resolve the live version                                 | Configure `resolveSessionVersion`, or pass `{ token }` with a `clientSecret` set                                      |
-| `INTROSPECTION_UNAVAILABLE`                                 | No `clientSecret`, or the IdP advertises no introspection endpoint                          | Introspect from your server with a confidential client                                                                |
-| `TOKEN_VERIFICATION_FAILED` - "no longer active"            | The platform session was revoked, or superseded by a newer one                              | Send the user back through login                                                                                      |
-| `CLAIM_INVALID` - "audience this resource server accepts"   | A shared-cookie session but no `apiAudience` configured                                     | Set `apiAudience` (Model A), or expect only your own ID token (Model B)                                               |
-| Session works right after login, then goes null             | Model A without `apiAudience`/`clientSecret`: a sibling service overwrote the shared cookie | Configure the platform path - see [Two session models](#two-session-models--pick-yours-first)                         |
-| `CRYPTO_UNAVAILABLE`                                        | Runtime has no Web Crypto                                                                   | Node.js 18+, a modern browser, or an edge runtime                                                                     |
-| `DISCOVERY_FAILED`                                          | `/.well-known/openid-configuration` unreachable or incomplete                               | Check the issuer URL and network egress                                                                               |
-| `MACHINE_TOKEN_NOT_ALLOWED`                                 | A `client_credentials` token reached a path that expects a user                             | Pass `allowMachineTokens: true` and branch on `tokenUse`, or use `verifyMachineToken()`                               |
-| `NOT_A_MACHINE_TOKEN`                                       | A user token was passed to `verifyMachineToken()`                                           | Use `verifyAccessToken()` for user tokens                                                                             |
-| `ACCESS_DENIED`                                             | The user refused a step-up or a device authorization                                        | Expected; tell them what was declined rather than retrying                                                            |
-| `EXPIRED_TOKEN`                                             | The escalation or device code passed its deadline                                           | Start the flow again. Only the server decides this - don't add a client-side timeout                                  |
-| `ESCALATION_FAILED`                                        | Unknown method (`invalid_use`), unusable `id_token_hint`, or an unknown subject              | Check `use` against what the provider supports, and pass an `idTokenHint` you were issued                             |
-| `DEVICE_FLOW_FAILED`                                        | Not registered for the grant, device code already redeemed, or no endpoint advertised       | Enable the grant on the client; device codes are single use                                                           |
+| Error / code                                                | What happened                                                                                    | Fix                                                                                                                       |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `ISSUER_MISMATCH`                                           | The discovery document advertises a different issuer than you configured                         | Check your `OIDC_ISSUER` variable, or set `expectedIssuer` in your config                                                 |
+| `TOKEN_VERIFICATION_FAILED`, message mentions the signature | Forged token, or the IdP rotated keys                                                            | Retry once (the library refetches the JWKS itself); if it persists, check `OIDC_PRIVATE_KEY`/`OIDC_PUBLIC_KEY` are a pair |
+| `TOKEN_VERIFICATION_FAILED`, message mentions `aud`         | ID token minted for another `client_id`, or an ID token passed to `verifyAccessToken`            | Verify ID tokens with the client they were issued to; pass `access_token` to API verification                             |
+| `TOKEN_VERIFICATION_FAILED`, message mentions `iss`         | Token from a different IdP deployment                                                            | Align `issuer` / `OIDC_ISSUER` between app and IdP                                                                        |
+| `TOKEN_VERIFICATION_FAILED` - "Token has expired"           | Clock skew or a genuinely old token                                                              | Check server clocks; raise `clockToleranceSeconds` only for real skew                                                     |
+| `STATE_MISMATCH`                                            | `state` missing or different - often the transient cookie was lost                               | Set the cookie's key to be `SameSite=Lax` (not `Strict`), correct `path`, and don't start multiple logins in parallel     |
+| `NONCE_MISMATCH`                                            | The ID token was not bound to this authorization request                                         | Make sure the same client instance/storage handles authorize and callback and don't replay a callback URL                 |
+| `INVALID_CALLBACK`                                          | No `code`, or the PKCE verifier is gone                                                          | The login attempt expired (10 min) - start again from your login route                                                    |
+| `AUTHORIZATION_RESPONSE_ERROR`                              | The IdP returned `?error=` (e.g. `access_denied`)                                                | Expected when a user declines consent; send them back to your login page                                                  |
+| `STORAGE_UNAVAILABLE`                                       | A storage-backed call with no usable storage, or a cookie write in a Server Component            | Pass a storage implementation; move cookie writes into a Route Handler, Server Action or middleware                       |
+| `CLAIM_INVALID` - "unrecognised role"                       | The IdP issued a role this library version doesn't model                                         | The only valid roles in the original version is `user` and `admin`, do map it yourself if needed                          |
+| `SESSION_CHECK_UNAVAILABLE`                                 | `isSessionCurrent()` had no way to resolve the live version                                      | Configure `resolveSessionVersion`, or pass `{ token }` with a `clientSecret` set                                          |
+| `INTROSPECTION_UNAVAILABLE`                                 | No `clientSecret`, or the IdP advertises no introspection endpoint                               | Introspect from your server with a confidential client                                                                    |
+| `TOKEN_VERIFICATION_FAILED` - "no longer active"            | The platform session was revoked, or superseded by a newer one                                   | Send the user back through login                                                                                          |
+| `CLAIM_INVALID` - "audience this resource server accepts"   | A shared-cookie session but no `apiAudience` configured                                          | Set `apiAudience` (Model A), or expect only your own ID token (Model B)                                                   |
+| Session works right after login, then goes null             | Model A without `apiAudience`/`clientSecret`: a sibling service overwrote the shared cookie      | Configure the platform path - see [Two session models](#two-session-models--pick-yours-first)                             |
+| `CRYPTO_UNAVAILABLE`                                        | Runtime has no Web Crypto                                                                        | Node.js 18+, a modern browser, or an edge runtime                                                                         |
+| `DISCOVERY_FAILED`                                          | `/.well-known/openid-configuration` unreachable or incomplete                                    | Check the issuer URL and network egress                                                                                   |
+| `MACHINE_TOKEN_NOT_ALLOWED`                                 | A `client_credentials` token reached a path that expects a user                                  | Pass `allowMachineTokens: true` and branch on `tokenUse`, or use `verifyMachineToken()`                                   |
+| `NOT_A_MACHINE_TOKEN`                                       | A user token was passed to `verifyMachineToken()`                                                | Use `verifyAccessToken()` for user tokens                                                                                 |
+| `ACCESS_DENIED`                                             | The user refused a step-up or a device authorization                                             | Expected; tell them what was declined rather than retrying                                                                |
+| `EXPIRED_TOKEN`                                             | The escalation or device code passed its deadline                                                | Start the flow again. Only the server decides this - don't add a client-side timeout                                      |
+| `ESCALATION_FAILED`                                         | Unknown method (`invalid_use`), unusable `id_token_hint`, or an unknown subject                  | Check `use` against what the provider supports, and pass an `idTokenHint` you were issued                                 |
+| `INVALID_CHALLENGE`                                         | `createStepUpRequest()` got a header it could not parse, or one naming no `acr_values`/`max_age` | Check `isStepUpChallenge()` first; an ordinary 401 is answered with a plain login                                         |
+| `CLAIM_INVALID` - "does not satisfy"                        | The token's `acr` is weaker than `requiredAcr` demanded                                          | The provider ignored or could not meet `acr_values`. This is the check working                                            |
+| `DEVICE_FLOW_FAILED`                                        | Not registered for the grant, device code already redeemed, or no endpoint advertised            | Enable the grant on the client; device codes are single use                                                               |
 
 ---
 
@@ -1013,7 +1096,7 @@ Two things to know:
 - [ ] `redirectUri` and any `post_logout_redirect_uri` origin are registered with the IdP.
 - [ ] Transient login cookies are `HttpOnly`, `Secure`, `SameSite=Lax`.
 - [ ] `offline_access` requested only if you actually refresh; refreshed tokens are persisted
-      (the SDK does it when it owns storage - the IdP rotates and revokes replayed tokens).
+      (the library does it when it owns storage - the IdP rotates and revokes replayed tokens).
 - [ ] Privileged actions check `satisfiesAmr(...)` and, where it matters, `isSessionCurrent(...)`.
 - [ ] If you share the `.wilsoon.dev` cookie: `apiAudience` and `clientSecret` are set, and you
       never authorize on an ID token whose `aud` is not yours.

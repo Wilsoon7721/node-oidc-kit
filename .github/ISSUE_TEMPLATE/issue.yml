@@ -1,5 +1,5 @@
 name: Bug or issue
-description: Something in the SDK isn't behaving the way the docs say it should.
+description: Something in the library isn't behaving the way the docs say it should.
 labels: []
 body:
   - type: markdown

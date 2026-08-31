@@ -1,9 +1,9 @@
-import { StorageUnavailableError } from './errors';
+import { StorageUnavailableError } from "./errors";
 
 /**
- * The SDK's only persistence dependency: three synchronous string operations.
+ * The library's only persistence dependency: three synchronous string operations.
  *
- * Everything the SDK persists - the token response, plus the single-use `state`, `nonce`
+ * Everything the library persists - the token response, plus the single-use `state`, `nonce`
  * and PKCE verifier - is read and written through this interface under the
  * `STORAGE_KEYS` names. Supporting a new framework therefore means writing one adapter,
  * not touching `AuthClient`. Implementations ship for the browser
@@ -25,14 +25,14 @@ import { StorageUnavailableError } from './errors';
  * from the identity provider; `Strict` drops them and every login fails on state mismatch.
  */
 export interface AuthStorage {
-    /** Returns the stored value, or `null` when the key is absent. */
-    getItem(key: string): string | null;
+  /** Returns the stored value, or `null` when the key is absent. */
+  getItem(key: string): string | null;
 
-    /** Persists `value` under `key`, overwriting any existing value. */
-    setItem(key: string, value: string): void;
+  /** Persists `value` under `key`, overwriting any existing value. */
+  setItem(key: string, value: string): void;
 
-    /** Removes `key`. Absent keys are not an error. */
-    removeItem(key: string): void;
+  /** Removes `key`. Absent keys are not an error. */
+  removeItem(key: string): void;
 }
 
 /**
@@ -47,19 +47,19 @@ export interface AuthStorage {
  * tokens on a site that renders untrusted content.
  */
 export class BrowserStorage implements AuthStorage {
-    constructor(private storage: Storage = window.localStorage) { }
+  constructor(private storage: Storage = window.localStorage) {}
 
-    getItem(key: string): string | null {
-        return this.storage.getItem(key);
-    }
+  getItem(key: string): string | null {
+    return this.storage.getItem(key);
+  }
 
-    setItem(key: string, value: string): void {
-        this.storage.setItem(key, value);
-    }
+  setItem(key: string, value: string): void {
+    this.storage.setItem(key, value);
+  }
 
-    removeItem(key: string): void {
-        this.storage.removeItem(key);
-    }
+  removeItem(key: string): void {
+    this.storage.removeItem(key);
+  }
 }
 
 /**
@@ -72,20 +72,20 @@ export class BrowserStorage implements AuthStorage {
  * store for that.
  */
 export class MemoryStorage implements AuthStorage {
-    private store = new Map<string, string>();
+  private store = new Map<string, string>();
 
-    getItem(key: string): string | null {
-        const value = this.store.get(key);
-        return value === undefined ? null : value;
-    }
+  getItem(key: string): string | null {
+    const value = this.store.get(key);
+    return value === undefined ? null : value;
+  }
 
-    setItem(key: string, value: string): void {
-        this.store.set(key, value);
-    }
+  setItem(key: string, value: string): void {
+    this.store.set(key, value);
+  }
 
-    removeItem(key: string): void {
-        this.store.delete(key);
-    }
+  removeItem(key: string): void {
+    this.store.delete(key);
+  }
 }
 
 /**
@@ -99,24 +99,20 @@ export class MemoryStorage implements AuthStorage {
  * @internal
  */
 export class UnavailableStorage implements AuthStorage {
-    getItem(key: string): string | null {
-        throw new StorageUnavailableError(`Reading "${key}" from storage`);
-    }
+  getItem(key: string): string | null {
+    throw new StorageUnavailableError(`Reading "${key}" from storage`);
+  }
 
-    setItem(key: string): void {
-        throw new StorageUnavailableError(`Writing "${key}" to storage`);
-    }
+  setItem(key: string): void {
+    throw new StorageUnavailableError(`Writing "${key}" to storage`);
+  }
 
-    removeItem(key: string): void {
-        throw new StorageUnavailableError(`Removing "${key}" from storage`);
-    }
+  removeItem(key: string): void {
+    throw new StorageUnavailableError(`Removing "${key}" from storage`);
+  }
 }
 
 /** Whether reads and writes against this storage will actually be attempted. */
 export function isUsableStorage(storage: AuthStorage | undefined | null): boolean {
-    return !!storage
-        && !(storage instanceof UnavailableStorage)
-        && typeof storage.getItem === 'function'
-        && typeof storage.setItem === 'function'
-        && typeof storage.removeItem === 'function';
+  return !!storage && !(storage instanceof UnavailableStorage) && typeof storage.getItem === "function" && typeof storage.setItem === "function" && typeof storage.removeItem === "function";
 }

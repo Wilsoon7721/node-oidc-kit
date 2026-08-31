@@ -47,4 +47,4 @@ This is the _client_ half of OIDC. It doesn't run an authorization server, issue
 
 - [Installation](/getting-started/installation) - requirements and package choice
 - [Quick start](/getting-started/quick-start) - a working login flow in a few lines
-- [Flows](/flows/escalation) - step-up, the device grant, and machine-to-machine tokens
+- [Flows](/flows/step-up) - step-up, the device grant, and machine-to-machine tokens

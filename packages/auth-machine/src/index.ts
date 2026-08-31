@@ -58,10 +58,15 @@ interface CachedToken {
 
 /**
  * Whether a set of verified token claims describes a machine token rather than a user.
- * Pass claims that have already been verified: an unverified decode reports what the bearer chose to claim.
+ * Recognises `token_use: "client"` and an RFC 9068 `sub` equal to `client_id`; pass claims that have already been verified, since an unverified decode reports only what the bearer chose to claim.
  */
 export function isMachineToken(claims: Record<string, unknown> | null | undefined): boolean {
-  return claims?.token_use === MACHINE_TOKEN_USE;
+  if (!claims) return false;
+  if (claims.token_use === MACHINE_TOKEN_USE) return true;
+
+  // RFC 9068 §5: a client_credentials access token's `sub` SHOULD be the client id. Checking it means a provider that emits no `token_use` is still recognised, rather than every machine token quietly reading as a user.
+  const subject = claims.sub;
+  return typeof subject === "string" && subject.length > 0 && subject === claims.client_id;
 }
 
 /**

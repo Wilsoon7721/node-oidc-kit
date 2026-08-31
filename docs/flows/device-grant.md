@@ -31,7 +31,7 @@ POST <token_endpoint>                  →  authorization_pending | slow_down |
 
 ## Registration
 
-The client must be registered for the device grant at the provider, or the first call is refused with `unauthorized_client`. A public client is expected and needs no secret. However, a client that registered a secret must still present it, and the SDK sends it automatically when `clientSecret` is configured.
+The client must be registered for the device grant at the provider, or the first call is refused with `unauthorized_client`. A public client is expected and needs no secret. However, a client that registered a secret must still present it, and the library sends it automatically when `clientSecret` is configured.
 
 The endpoint comes from discovery (`device_authorization_endpoint`). A provider that doesn't advertise one gets a `DeviceFlowError` saying so, rather than a 404 from a guessed URL.
 
@@ -47,7 +47,7 @@ No vowels, and no `0`, `O`, `1`, `I` or `L`. No vowels means no code can ever sp
 
 ## Polling
 
-`interval` starts at whatever the provider advertises, and only ever goes up. A client that polls too fast gets `slow_down` - which is _not_ a failure - and the SDK adopts the raised interval rather than the one it started with.
+`interval` starts at whatever the provider advertises, and only ever goes up. A client that polls too fast gets `slow_down` - which is _not_ a failure - and the library adopts the raised interval rather than the one it started with.
 
 As with [escalation](/flows/escalation), the server owns the deadline: the loop polls until the provider reports `expired_token` instead of timing out on its own clock.
 
@@ -62,7 +62,7 @@ await client.authorizeDevice({
 ```
 
 {% callout type="warning" title="A redeemed device code is gone, not slow" %}
-Device codes are single use, and the provider marks one spent _before_ it generates anything from it. A client that keeps polling after success gets `invalid_grant`, which the SDK surfaces as `DeviceFlowError` rather than folding into "keep waiting" - it means the code is finished, not that the user is taking their time.
+Device codes are single use, and the provider marks one spent _before_ it generates anything from it. A client that keeps polling after success gets `invalid_grant`, which the library surfaces as `DeviceFlowError` rather than folding into "keep waiting" - it means the code is finished, not that the user is taking their time.
 {% /callout %}
 
 ## What the tokens say about authentication

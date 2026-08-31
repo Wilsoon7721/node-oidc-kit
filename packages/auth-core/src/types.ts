@@ -1,5 +1,5 @@
 /**
- * Everything the SDK needs to talk to one identity provider as one registered client.
+ * Everything the library needs to talk to one identity provider as one registered client.
  *
  * Only `clientId` and `issuer` are always required; the rest are needed per use case, and
  * each says below which. The same object is accepted by `@wilsoon/auth-next`'s
@@ -50,7 +50,7 @@ export interface AuthConfig {
   /**
    * Optional override for the `iss` value that tokens are validated against.
    *
-   * By default the SDK requires the discovery document's `issuer` to match
+   * By default the library requires the discovery document's `issuer` to match
    * {@link AuthConfig.issuer} and validates tokens against it. Set this only when the
    * provider deliberately advertises an issuer that differs from the base URL you
    * connect to.
@@ -79,6 +79,13 @@ export interface AuthConfig {
   platformSessionCacheSeconds?: number;
   /** Tuning for the cached remote JSON Web Key Set. */
   jwks?: JwksOptions;
+  /**
+   * Decides whether verified access token claims describe a machine (`client_credentials`) caller rather than a user.
+   *
+   * Overrides the built-in check, which recognises `token_use: "client"` and an RFC 9068 `sub` equal to `client_id`.
+   * Set this for a provider that marks machine tokens some other way - returning `false` for a token that really is one lets a `client_id` reach code written for users.
+   */
+  detectMachineToken?: (claims: Readonly<Record<string, unknown>>) => boolean;
   /**
    * Base URL of the provider's method-escalation API (default `<issuer>/api/escalate`).
    *
@@ -114,7 +121,7 @@ export interface JwksOptions {
 }
 
 /**
- * The subset of OIDC discovery metadata this SDK reads.
+ * The subset of OIDC discovery metadata this library reads.
  *
  * The five non-optional fields are required: discovery fails if the provider omits any of
  * them. The optional ones each unlock a feature - no `end_session_endpoint` means no
@@ -168,13 +175,13 @@ export interface TokenResponse {
 }
 
 /**
- * The roles this SDK models.
+ * The roles this library models.
  *
  * Deliberately a closed set: a `role` claim arriving from the network is narrowed against
- * {@link USER_ROLES} rather than asserted, so a value the SDK does not model throws instead
+ * {@link USER_ROLES} rather than asserted, so a value the library does not model throws instead
  * of being quietly treated as a known one.
  *
- * This is the SDK's one hardcoded assumption about the provider's vocabulary. A provider
+ * This is the library's one hardcoded assumption about the provider's vocabulary. A provider
  * that issues other roles needs this union and {@link USER_ROLES} widened together - see
  * "Roles" in the repository README. Everything else, `amr` included, compares plain strings.
  */
@@ -208,7 +215,7 @@ export interface ProfileUser {
  * A user identity derived from an ID token whose signature, issuer, audience and expiry
  * have all been verified against the provider's JWKS.
  *
- * This is the only type in the SDK that is safe to authorize on.
+ * This is the only type in the library that is safe to authorize on.
  */
 export interface AuthenticatedUser extends ProfileUser {
   /**
@@ -404,6 +411,12 @@ export interface VerifyIdTokenOptions {
   nonce?: string;
   /** Reject the token if `auth_time` is older than this many seconds (step-up checks). */
   maxAuthAgeSeconds?: number;
+  /**
+   * Require the token's `acr` claim to be one of these values.
+   *
+   * Requesting `acr_values` is a demand the provider is free to ignore, and one that ignores it returns a perfectly valid token describing a weaker authentication. Checking here is what turns the request into a guarantee.
+   */
+  requiredAcr?: string | string[];
 }
 
 /** Options for {@link AuthClient.verifyAccessToken}. */
@@ -446,6 +459,12 @@ export interface AuthorizeUrlOptions {
   prompt?: string;
   /** OIDC `acr_values`, used to request a stronger authentication context. */
   acrValues?: string | string[];
+  /**
+   * OIDC `max_age`: the maximum age, in seconds, of the authentication the client will accept.
+   *
+   * `0` demands a fresh authentication outright. The provider must then return `auth_time` in the ID token, so pass the same number to {@link VerifyIdTokenOptions.maxAuthAgeSeconds} on the way back - the request is a demand, and only the check makes it a guarantee.
+   */
+  maxAge?: number;
   /** OIDC `login_hint`. */
   loginHint?: string;
   /** Additional authorization request parameters. */

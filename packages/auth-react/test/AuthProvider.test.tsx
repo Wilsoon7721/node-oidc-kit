@@ -22,6 +22,7 @@ const Probe = () => {
             <div data-testid="amr">{user && user.verified ? user.authMethods.join(',') : 'none'}</div>
             <div data-testid="error">{error ? (error as { code?: string }).code ?? error.message : 'none'}</div>
             <button onClick={login}>Log in</button>
+            <button onClick={() => login({ acrValues: 'urn:wilsoon:acr:passkey', maxAge: 300 })}>Step up</button>
         </div>
     );
 };
@@ -110,6 +111,29 @@ describe('AuthProvider login', () => {
         expect(authorizeUrl.searchParams.get('state')).toBe(window.sessionStorage.getItem(STORAGE_KEYS.state));
         expect(authorizeUrl.searchParams.get('nonce')).toBe(window.sessionStorage.getItem(STORAGE_KEYS.nonce));
         expect(authorizeUrl.searchParams.get('code_challenge_method')).toBe('S256');
+    });
+
+    it('carries acr_values and max_age through to the authorization request', async () => {
+        renderProvider();
+        await settled();
+
+        screen.getByText('Step up').click();
+
+        await waitFor(() => expect(new URL(window.location.href).pathname).toBe('/authorize'));
+
+        const authorizeUrl = new URL(window.location.href);
+        expect(authorizeUrl.searchParams.get('acr_values')).toBe('urn:wilsoon:acr:passkey');
+        expect(authorizeUrl.searchParams.get('max_age')).toBe('300');
+    });
+
+    it('sends no max_age when the caller asked for none', async () => {
+        renderProvider();
+        await settled();
+
+        screen.getByText('Log in').click();
+
+        await waitFor(() => expect(new URL(window.location.href).pathname).toBe('/authorize'));
+        expect(new URL(window.location.href).searchParams.get('max_age')).toBeNull();
     });
 });
 

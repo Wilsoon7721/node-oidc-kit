@@ -12,7 +12,7 @@ Siblings: **`@wilsoon/auth-core`** · [`@wilsoon/auth-react`](https://www.npmjs.
 - **Isomorphic Architecture:** Runs seamlessly in the browser, Node.js 18+, and Edge environments.
 - **Token verification:** RS256 signature verification against the provider's JWKS, with issuer, audience, expiry and nonce checks.
 - **OIDC Discovery:** Automatically discovers authorization, token, userinfo and JWKS endpoints from the issuer.
-- **PKCE + state + nonce:** Generated, persisted and validated by the SDK rather than by every consumer.
+- **PKCE + state + nonce:** Generated, persisted and validated by the library rather than by every consumer.
 - **Token Management:** Handles token exchange, storage, and single-flight refresh with rotation support.
 
 ## Installation
@@ -52,7 +52,7 @@ if (!satisfiesAmr(user, [AMR.FIDO])) return stepUp();
 return allow();
 ```
 
-Nothing else in the SDK is a substitute for this. The userinfo endpoint returns display claims only, and the decode helpers verify nothing at all - see [Which method returns what](#which-method-returns-what).
+Nothing else in the library is a substitute for this. The userinfo endpoint returns display claims only, and the decode helpers verify nothing at all - see [Which method returns what](#which-method-returns-what).
 
 ## Several services, one login
 
@@ -153,7 +153,7 @@ assertAmr(user, [AMR.FIDO]); // throws ClaimValidationError
 A JWT stays valid until it expires, so "sign out everywhere" does not take effect on its own.
 The reference provider bumps a per-user session version on revocation, and the ID token carries
 the version it was minted with. Comparing the two is what makes revocation enforceable - supply
-a resolver so the SDK can read the live value:
+a resolver so the library can read the live value:
 
 ```typescript
 const client = new AuthClient({
@@ -182,7 +182,7 @@ Without either route, `isSessionCurrent()` throws `SessionCheckUnavailableError`
 const tokens = await client.refreshAccessToken(refreshToken);
 ```
 
-The provider rotates refresh tokens and revokes the whole family if one is replayed. Concurrent calls for the same token therefore share a single request, and the rotated response is written back automatically when the SDK is managing stored tokens (pass `{ persist: false }` to opt out, or `true` to force it).
+The provider rotates refresh tokens and revokes the whole family if one is replayed. Concurrent calls for the same token therefore share a single request, and the rotated response is written back automatically when the library is managing stored tokens (pass `{ persist: false }` to opt out, or `true` to force it).
 
 ## Storage
 

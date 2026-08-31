@@ -17,7 +17,7 @@ Four packages, one runtime dependency
 ([`jose`](https://github.com/panva/jose)), and no Node-only imports - just `fetch` and Web
 Crypto. It runs in a browser, in Node 18+, and on edge runtimes like Cloudflare Workers.
 
-> This was originally a private repository. I've only decided to publicise it now in v2 as I originally built it to serve my own purposes at [id.wilsoon.dev](https://id.wilsoon.dev), but things have been patched to be more generic since then.  
+> This was originally a private repository. I've only decided to publicise it now in v2 as I originally built it to serve my own purposes at [id.wilsoon.dev](https://id.wilsoon.dev), but things have been patched to be more generic since then.
 
 Full documentation, with slightly more depth than this README, is at
 **[docs.wilsoon.dev/node-oidc-kit](https://docs.wilsoon.dev/node-oidc-kit)**.
@@ -43,12 +43,12 @@ As such, I built this authentication library in order to plug my provider into a
 
 ## Packages
 
-| Package                                      | What it's for                                                                                                      | Depends on            |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------- |
-| [`@wilsoon/auth-core`](packages/auth-core)   | The client: discovery, PKCE, code exchange, token verification, introspection, `amr` policies. Framework-agnostic. | `jose`                |
-| [`@wilsoon/auth-react`](packages/auth-react) | `<AuthProvider>` and `useAuth()` for browser session state.                                                        | core, React ≥16       |
-| [`@wilsoon/auth-next`](packages/auth-next)   | `getSession()`, `requireSession()`, `createAuthMiddleware()`, `ServerCookieStorage`.                               | core, React, Next ≥14 |
-| [`@wilsoon/auth-machine`](packages/auth-machine) | `client_credentials` tokens for server-to-server calls, with caching and single-flight. **0.x**, standalone.  | nothing               |
+| Package                                          | What it's for                                                                                                      | Depends on            |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | --------------------- |
+| [`@wilsoon/auth-core`](packages/auth-core)       | The client: discovery, PKCE, code exchange, token verification, introspection, `amr` policies. Framework-agnostic. | `jose`                |
+| [`@wilsoon/auth-react`](packages/auth-react)     | `<AuthProvider>` and `useAuth()` for browser session state.                                                        | core, React ≥16       |
+| [`@wilsoon/auth-next`](packages/auth-next)       | `getSession()`, `requireSession()`, `createAuthMiddleware()`, `ServerCookieStorage`.                               | core, React, Next ≥14 |
+| [`@wilsoon/auth-machine`](packages/auth-machine) | `client_credentials` tokens for server-to-server calls, with caching and single-flight. **0.x**, standalone.       | nothing               |
 
 Using anything else - Astro, SvelteKit, Hono, Express? Use `auth-core` directly and write one [storage adapter](#storage-the-one-thing-to-understand). That's the whole integration.
 
@@ -106,7 +106,7 @@ transient state. If you find yourself calling `exchangeCodeForToken()` and
 
 ## Pointing it at your own provider
 
-Discovery does the work: set `issuer` and the SDK reads `/.well-known/openid-configuration` for every endpoint. Apart from the issuer and the `/openid-configuration` path, there are no hardcoded URLs.
+Discovery does the work: set `issuer` and the library reads `/.well-known/openid-configuration` for every endpoint. Apart from the issuer and the `/openid-configuration` path, there are no hardcoded URLs.
 
 Your provider needs to offer:
 | Requirement | Why | If it doesn't |
@@ -248,7 +248,11 @@ Three token kinds share an issuer, an audience and an algorithm, and differ only
 Three flows past authorization-code-plus-PKCE, documented in full at [docs.wilsoon.dev/node-oidc-kit](https://docs.wilsoon.dev/node-oidc-kit).
 
 ```ts
-// Step-up: require a stronger method for one action.
+// Step-up, the portable way: OIDC acr_values + max_age, and RFC 9470 to demand it.
+const { url } = await client.createStepUpRequest(res.headers.get("www-authenticate"));
+await client.verifyIdToken(idToken, { requiredAcr, maxAuthAgeSeconds: 300 });
+
+// Step-up through a back channel, for a client with no redirect URI (this provider only).
 await client.reauthorize(["passkey", "fido"], true, { idTokenHint, openUrl });
 
 // Device grant (RFC 8628): sign in a CLI with no redirect URI.
@@ -261,11 +265,19 @@ await machine.fetch("https://api.example.com/reports");
 
 Escalation and the device grant share one polling loop, because the provider answers both with RFC 8628's vocabulary. In both, **the server owns the deadline**: the loop polls until the provider reports `expired_token` rather than timing out on its own clock, since a client-side timer that fires first turns a server-authoritative answer into a guess.
 
+Of the four, only escalation is provider-specific. Step-up is OIDC Core plus RFC 9470, the device grant is RFC 8628 read from discovery, and `client_credentials` is RFC 6749 - all three work against any conforming provider.
+
 ## Things that are still specific to one provider
 
-Being honest about what a fork would have to change. There are five, and only the first is likely to matter the most.
+Being honest about what a fork would have to change. Six, and only the first two are likely to matter much.
 
-### 1. Roles are a closed set
+### 1. Method escalation is an extension, not a standard
+
+`reauthorize()` and the `/api/escalate` endpoints behind it exist only on this provider. There is no OIDC or RFC equivalent and nothing to discover, so a fork pointing elsewhere finds no endpoint to call.
+
+Nothing else depends on it. [Step-up](https://docs.wilsoon.dev/node-oidc-kit/flows/step-up) covers the same ground portably with `acr_values` and `max_age`, and is what a fork should use.
+
+### 2. Roles are a closed set
 
 ```ts
 // packages/auth-core/src/types.ts
@@ -279,20 +291,20 @@ This means that any `role` claim outside of that set will throw `ClaimValidation
 (This is not yet configurable at runtime. Making it so - `roles?: readonly string[]` on
 `AuthConfig` - could be a good first contribution if you would like to help, see [Contributing](#contributing).)
 
-### 2. RS256 only
+### 3. RS256 only
 
 `ALLOWED_ALGORITHMS` in `jwt.ts` is `['RS256']`. <br />
 An allowlist is mandatory - without one a verifier can be talked into `alg: "none"` or HMAC confusion - but the contents are a choice. A provider signing with ES256 or EdDSA needs that array widened. I suggest to keep it an allowlist and never derive it from the token header.
 
-### 3. Storage key names
+### 4. Storage key names
 
 `STORAGE_KEYS` uses `wilsoon_id_tokens`, `wilsoon_auth_state`, and so on. Cosmetic, and remappable in your adapter without touching the core library.
 
-### 4. One hardcoded logout path
+### 5. One hardcoded logout path
 
 `AuthProvider`'s `logout()` falls back to `${issuer}/api/logout` when the session was hydrated and there's no `id_token` to use as a hint. Everything else goes through discovery. Against another provider, you'll have to handle that case in your own code.
 
-### 5. `hydrateSession()` assumes a cookie-friendly userinfo endpoint
+### 6. `hydrateSession()` assumes a cookie-friendly userinfo endpoint
 
 It calls userinfo with `credentials: 'include'` and no `Authorization` header, so the provider must accept a cookie-authenticated request and send CORS credentials headers for your origin. Providers that only accept bearer tokens won't support it - use a server-side session read instead.
 

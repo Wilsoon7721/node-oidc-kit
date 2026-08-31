@@ -1,11 +1,22 @@
 ---
 title: Method escalation
 identifier: escalation
-order: 1
+order: 4
 ---
 
-Step-up authentication: the user is already signed in, and you need them to prove something
-stronger before one particular action. A passkey before changing a payout account, say.
+Step-up through a back channel: the client asks the provider to require a stronger method, puts
+a URL in front of the user, and polls for the verdict.
+
+{% callout type="warning" title="A provider extension, not a standard" %}
+Escalation is specific to the reference provider. It is not part of OIDC or any RFC, it is not
+discoverable, and pointing this at Okta, Auth0 or Keycloak will find no endpoint to talk to.
+
+For step-up that works against any conforming provider, use
+[step-up authentication](/flows/step-up) - `acr_values` and `max_age` on an ordinary
+authorization request. Come back here when you need what that cannot do: a client with no
+redirect URI demanding step-up, or asking without showing anything to a user who already
+qualifies.
+{% /callout %}
 
 ```ts
 await client.reauthorize(["passkey", "fido"], true, {
@@ -17,12 +28,17 @@ await client.reauthorize(["passkey", "fido"], true, {
 That one call creates the request, puts a URL in front of the user, polls until the provider
 gives a verdict, and verifies the proof that comes back.
 
-## Why it isn't just `prompt=login`
+## What it does that the standard path cannot
 
-An authorization request with `acr_values` restarts the login. Escalation doesn't - the
-session survives, and what changes is that the provider records a demand and answers whether
-it was met. The difference that matters is the last part: a relying party can prove
-afterwards that a step-up happened, to somebody other than itself.
+An authorization request with `acr_values` restarts the login through a redirect. Escalation
+keeps the session, and adds three things the standard path has no answer for.
+
+- **No redirect URI needed.** A CLI can demand step-up, because the URL goes to the user
+  rather than to a registered callback.
+- **It can complete without asking.** With `force: false` a session that already qualifies is
+  satisfied on the first poll, and the user sees nothing.
+- **A narrow proof.** The `escalation_token` asserts that one action was authorised, which is
+  a smaller claim than an ID token's "this person is signed in".
 
 ## The three calls
 
@@ -146,7 +162,7 @@ const proof = await client.verifyEscalationToken(result.escalationToken!);
 Both are RS256, from the same issuer, audienced to the same client. The only thing separating
 them is the `evt` claim, which is `"escalation"` on one and absent on the other.
 
-The SDK checks this in **both** directions: `verifyEscalationToken()` refuses anything whose
+The library checks this in **both** directions: `verifyEscalationToken()` refuses anything whose
 `evt` isn't `escalation`, and `verifyIdToken()` refuses any token that carries an `evt` at
 all. Without the second check, a proof that one action was authorised would verify as proof
 that a user is signed in.
@@ -154,6 +170,6 @@ that a user is signed in.
 
 ## Configuration
 
-Escalation is not an OIDC endpoint, so discovery says nothing about it. The SDK assumes
+Escalation is not an OIDC endpoint, so discovery says nothing about it. The library assumes
 `<issuer>/api/escalate`; override with `escalationEndpoint` if your provider mounts it
 elsewhere. The poll endpoint is always `<escalationEndpoint>/poll`.

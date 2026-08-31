@@ -364,10 +364,51 @@ describe('machine tokens (client_credentials)', () => {
         )).rejects.toThrow(MachineTokenNotAllowedError);
     });
 
+    it('catches a machine token from a provider that emits no token_use', async () => {
+        // RFC 9068 §5: a client_credentials `sub` SHOULD be the client id. Relying on `token_use`
+        // alone failed open here - every machine token read as a user, which is the exact
+        // confusion the check exists to prevent.
+        const foreign = await idp.mintAccessToken({ sub: MACHINE_CLIENT, client_id: MACHINE_CLIENT, scope: undefined });
+
+        await expect(client().verifyAccessToken(foreign)).rejects.toThrow(MachineTokenNotAllowedError);
+
+        const claims = await client().verifyAccessToken(foreign, { allowMachineTokens: true });
+        expect(claims.tokenUse).toBe('client');
+    });
+
+    it('does not mistake an ordinary user token for a machine one', async () => {
+        // `sub` is the user and `client_id` is this application, so the two differ.
+        const claims = await client().verifyAccessToken(await idp.mintAccessToken());
+        expect(claims.tokenUse).toBe('user');
+    });
+
+    it('lets a provider define its own marker through detectMachineToken', async () => {
+        const custom = new AuthClient({
+            clientId: CLIENT_ID,
+            issuer: idp.issuer,
+            apiAudience: API_AUDIENCE,
+            detectMachineToken: (claims) => claims.kind === 'service',
+        }, new MemoryStorage());
+
+        const marked = await idp.mintAccessToken({ sub: 'svc-9', kind: 'service' });
+        await expect(custom.verifyAccessToken(marked)).rejects.toThrow(MachineTokenNotAllowedError);
+
+        // And the predicate replaces the defaults rather than adding to them, so a token the
+        // built-in signals would flag is a user here.
+        const builtinWouldFlag = await idp.mintAccessToken({ sub: MACHINE_CLIENT, client_id: MACHINE_CLIENT });
+        const claims = await custom.verifyAccessToken(builtinWouldFlag);
+        expect(claims.tokenUse).toBe('user');
+    });
+
     it('isMachineToken reads the claim, and defaults everything else to a user', () => {
         expect(isMachineToken({ token_use: 'client' })).toBe(true);
         expect(isMachineToken({ token_use: 'user' })).toBe(false);
         expect(isMachineToken({})).toBe(false);
         expect(isMachineToken(null)).toBe(false);
+
+        // The RFC 9068 signal, for providers that emit no token_use.
+        expect(isMachineToken({ sub: 'svc-1', client_id: 'svc-1' })).toBe(true);
+        expect(isMachineToken({ sub: 'user-1', client_id: 'svc-1' })).toBe(false);
+        expect(isMachineToken({ sub: '', client_id: '' })).toBe(false);
     });
 });

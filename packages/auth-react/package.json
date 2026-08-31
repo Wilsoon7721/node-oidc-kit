@@ -1,6 +1,6 @@
 {
   "name": "@wilsoon/auth-react",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "React context and hooks for OpenID Connect browser sessions",
   "keywords": [
     "oidc",

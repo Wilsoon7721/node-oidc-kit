@@ -311,5 +311,9 @@ describe('isMachineToken', () => {
         expect(isMachineToken({})).toBe(false);
         expect(isMachineToken(null)).toBe(false);
         expect(isMachineToken(undefined)).toBe(false);
+
+        // RFC 9068 fallback, for a provider that emits no token_use at all.
+        expect(isMachineToken({ sub: 'svc-1', client_id: 'svc-1' })).toBe(true);
+        expect(isMachineToken({ sub: 'user-1', client_id: 'svc-1' })).toBe(false);
     });
 });

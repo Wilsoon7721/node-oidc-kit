@@ -102,3 +102,7 @@ The grant itself is one request returning one token. Everything of value is arou
 ## Where the cache lives
 
 Process memory, on purpose. The token is short-lived and cheap to re-obtain; writing it to disk or Redis would create a credential at rest with none of the protections the secret itself has.
+
+## Next
+
+[Method escalation](/flows/escalation) - back-channel step-up, and the one flow here that is a provider extension rather than a standard.

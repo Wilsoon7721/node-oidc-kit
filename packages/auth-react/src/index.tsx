@@ -1,8 +1,8 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, useMemo, useRef } from 'react';
-import { AuthClient, BrowserStorage, TokenResponse } from '@wilsoon/auth-core';
-import { AuthState, LoginOptions, SessionUser } from './types';
+import React, { createContext, useContext, useEffect, useState, useMemo, useRef } from "react";
+import { AuthClient, BrowserStorage, TokenResponse } from "@wilsoon/auth-core";
+import { AuthState, LoginOptions, SessionUser } from "./types";
 
 const AuthContext = createContext<AuthState | null>(null);
 
@@ -20,9 +20,9 @@ const AuthContext = createContext<AuthState | null>(null);
  * the userinfo endpoint with `credentials: 'include'`. That endpoint returns profile claims
  * only, so the hydrated user is marked `verified: false` and carries no authorization
  * fields. Check `user.verified` before reading them.
- * 
- * No refresh here. The session cookie is `HttpOnly`, so this provider cannot see the refresh token. 
- * Instead, SPAs should react reactively (on 401s) and Next.js can utilise a middleware instead. 
+ *
+ * No refresh here. The session cookie is `HttpOnly`, so this provider cannot see the refresh token.
+ * Instead, SPAs should react reactively (on 401s) and Next.js can utilise a middleware instead.
  */
 export const AuthProvider: React.FC<{
   clientId: string;
@@ -32,18 +32,12 @@ export const AuthProvider: React.FC<{
   cookieDomain?: string;
   children: React.ReactNode;
 }> = ({ clientId, issuer, redirectUri, scope, cookieDomain, children }) => {
-  const scopeKey = scope ? scope.join(' ') : '';
-  const config = useMemo(
-    () => ({ clientId, issuer, redirectUri, cookieDomain, scope: scopeKey ? scopeKey.split(' ') : undefined }),
-    [clientId, issuer, redirectUri, cookieDomain, scopeKey]
-  );
+  const scopeKey = scope ? scope.join(" ") : "";
+  const config = useMemo(() => ({ clientId, issuer, redirectUri, cookieDomain, scope: scopeKey ? scopeKey.split(" ") : undefined }), [clientId, issuer, redirectUri, cookieDomain, scopeKey]);
 
   // sessionStorage, not localStorage: `state`, `nonce` and the PKCE verifier are single-use
   // values scoped to one login attempt in one tab.
-  const client = useMemo(
-    () => new AuthClient(config, typeof window !== 'undefined' ? new BrowserStorage(window.sessionStorage) : undefined),
-    [config]
-  );
+  const client = useMemo(() => new AuthClient(config, typeof window !== "undefined" ? new BrowserStorage(window.sessionStorage) : undefined), [config]);
 
   const [user, setUser] = useState<SessionUser | null>(null);
   const [tokens, setTokens] = useState<TokenResponse | null>(null);
@@ -57,7 +51,7 @@ export const AuthProvider: React.FC<{
       processingRef.current = true;
 
       const params = new URLSearchParams(window.location.search);
-      const isCallback = params.has('code') || params.has('error');
+      const isCallback = params.has("code") || params.has("error");
 
       try {
         if (isCallback) {
@@ -88,12 +82,12 @@ export const AuthProvider: React.FC<{
   const login = async (options?: LoginOptions | React.MouseEvent<HTMLElement>) => {
     // `login` is commonly passed straight to `onClick`, so an event argument is discarded
     // rather than read as options, and the options are picked field by field.
-    const requested: LoginOptions = options && !('nativeEvent' in options) ? options : {};
-    const { scope: loginScope, prompt, acrValues, loginHint } = requested;
+    const requested: LoginOptions = options && !("nativeEvent" in options) ? options : {};
+    const { scope: loginScope, prompt, acrValues, maxAge, loginHint } = requested;
 
     // createAuthorizeUrl persists state, nonce and the PKCE verifier through the client's
     // storage, so the callback cannot be completed without them.
-    const { url } = await client.createAuthorizeUrl({ scope: loginScope, prompt, acrValues, loginHint });
+    const { url } = await client.createAuthorizeUrl({ scope: loginScope, prompt, acrValues, maxAge, loginHint });
     window.location.href = url;
   };
 
@@ -113,9 +107,9 @@ export const AuthProvider: React.FC<{
         // `end_session_endpoint` is what getLogoutUrl() needs the hint *for*. So fall back
         // to the reference provider's logout path.
         //
-        // This is the one provider-specific URL in the SDK. Against a different provider,
+        // This is the one provider-specific URL in the library. Against a different provider,
         // handle logout in your own code rather than relying on this branch.
-        const logoutUrl = `${config.issuer.replace(/\/+$/, '')}/api/logout?post_logout_redirect_uri=${encodeURIComponent(returnTo)}`;
+        const logoutUrl = `${config.issuer.replace(/\/+$/, "")}/api/logout?post_logout_redirect_uri=${encodeURIComponent(returnTo)}`;
         setUser(null);
         setTokens(null);
         window.location.href = logoutUrl;
@@ -139,9 +133,9 @@ export const AuthProvider: React.FC<{
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
 };
 
-export * from './types';
+export * from "./types";

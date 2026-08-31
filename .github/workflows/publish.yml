@@ -1,0 +1,67 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "'all', or one pnpm filter such as @wilsoon/auth-machine"
+        type: string
+        default: all
+      dry_run:
+        description: "Run every check and pack the tarballs, but publish nothing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+      - name: Show what would be published
+        env:
+          PACKAGES: ${{ inputs.packages }}
+        run: |
+          if [ "$PACKAGES" = "all" ]; then
+            pnpm -r publish --dry-run --no-git-checks
+          else
+            pnpm --filter "$PACKAGES" publish --dry-run --no-git-checks
+          fi
+
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          PACKAGES: ${{ inputs.packages }}
+          # Empty when the repo has no NPM_TOKEN secret, which is the intended end state
+          # once trusted publishing is confirmed working.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ "$PACKAGES" = "all" ]; then
+            pnpm -r publish --provenance --access public --no-git-checks
+          else
+            pnpm --filter "$PACKAGES" publish --provenance --access public --no-git-checks
+          fi

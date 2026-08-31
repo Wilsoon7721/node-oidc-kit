@@ -1,23 +1,21 @@
+import { AuthenticationChallenge, readAuthenticationChallenge } from "./challenge";
+import { AuthorizeDeviceOptions, DEVICE_GRANT_TYPE, DeviceAuthorization, DeviceAuthorizationOptions, DeviceGrantResult } from "./device";
 import { AuthError, AuthorizationDeniedError, AuthorizationExpiredError, AuthorizationResponseError, ClaimValidationError, DeviceFlowError, DiscoveryError, EscalationError, IssuerMismatchError, LogoutError, MachineTokenNotAllowedError, NonceMismatchError, NotAMachineTokenError, NoTokenError, SessionCheckUnavailableError, StateMismatchError, StorageUnavailableError, TokenExchangeError, TokenRefreshError, TokenVerificationError, UserInfoError } from "./errors";
+import { CreateEscalationOptions, ESCALATION_TOKEN_TYPE, EscalationRequest, EscalationResult, ReauthorizeOptions, VerifiedEscalation } from "./escalation";
 import { decodeTokenPayloadUnsafe, RemoteKeySet, verifyCompactJwt } from "./jwt";
-import { CreateEscalationOptions, EscalationRequest, EscalationResult, ESCALATION_TOKEN_TYPE, ReauthorizeOptions, VerifiedEscalation } from "./escalation";
-import { AuthorizeDeviceOptions, DeviceAuthorization, DeviceAuthorizationOptions, DeviceGrantResult, DEVICE_GRANT_TYPE } from "./device";
-import { isMachineToken, tokenUseOf } from "./machine";
+import { tokenUseOf } from "./machine";
 import { ACCESS_DENIED, AUTHORIZATION_PENDING, EXPIRED_TOKEN, PollStep, pollUntilResolved, SLOW_DOWN } from "./polling";
 import { AuthStorage, BrowserStorage, isUsableStorage, UnavailableStorage } from "./storage";
-import { AccessTokenClaims, AuthConfig, AuthenticatedUser, AuthorizeRequest, AuthorizeUrlOptions, CallbackResult, DiscoveryDocument, HandleCallbackOptions, IntrospectionResponse, MachineClient, PlatformSessionOptions, ProfileUser, TokenResponse, UnverifiedUser, USER_ROLES, UserRole, VerifyAccessTokenOptions, VerifyIdTokenOptions } from "./types";
+import { AccessTokenClaims, AuthConfig, AuthenticatedUser, AuthorizeRequest, AuthorizeUrlOptions, CallbackResult, DiscoveryDocument, HandleCallbackOptions, IntrospectionResponse, MachineClient, PlatformSessionOptions, ProfileUser, TokenResponse, TokenUse, UnverifiedUser, USER_ROLES, UserRole, VerifyAccessTokenOptions, VerifyIdTokenOptions } from "./types";
 import { generateNonce, generatePKCE, generateState, normalizeIssuer, timingSafeEqual } from "./utils";
 
 /**
- * The names the SDK reads and writes through {@link AuthStorage}.
+ * The names the library reads and writes through {@link AuthStorage}.
  *
- * Exported because a storage adapter usually needs to tell them apart - the token blob is
- * long-lived, the other three are single-use and expire in minutes. See
- * `ServerCookieStorage` in `@wilsoon/auth-next` for that split in practice.
+ * Exported because a storage adapter usually needs to tell them apart - the token blob is long-lived, the other three are single-use and expire in minutes.
+ * See `ServerCookieStorage` in `@wilsoon/auth-next` for that split in practice.
  *
- * These are fixed at the SDK level. To put the token blob under a different cookie name,
- * map it inside your adapter - the Next.js middleware's `cookieName` option does exactly
- * that - rather than expecting the client to emit a different key.
+ * These are fixed at the library level. To put the token blob under a different cookie name, map it inside your adapter.
  */
 export const STORAGE_KEYS = {
   /** The persisted token response. */
@@ -35,7 +33,7 @@ const TOKEN_KEY = STORAGE_KEYS.tokens;
 const DEFAULT_SCOPES = ["openid", "profile", "email"];
 const DEFAULT_CLOCK_TOLERANCE_SECONDS = 60;
 
-/** Authorization request parameters the SDK controls and `extraParams` may not override. */
+/** Authorization request parameters the library controls and `extraParams` may not override. */
 const RESERVED_AUTHORIZE_PARAMS = new Set(["client_id", "redirect_uri", "response_type", "scope", "state", "nonce", "code_challenge", "code_challenge_method"]);
 
 /** Upper bound on cached platform sessions, so a long-lived client cannot grow unbounded. */
@@ -70,12 +68,9 @@ const asNumber = (value: unknown): number | undefined => {
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 /**
- * An OIDC relying party: discovery, authorization requests, code exchange, token
- * verification and profile lookup for one registered client.
+ * An OIDC relying party: discovery, authorization requests, code exchange, token verification and profile lookup for one registered client.
  *
- * Framework-agnostic by construction - it depends on `fetch`, Web Crypto and an
- * {@link AuthStorage} adapter and nothing else - so the same client works in a browser, in
- * Node, and on an edge runtime.
+ * Framework-agnostic: it depends on `fetch`, Web Crypto and an {@link AuthStorage} adapter and nothing else - so the same client works in a browser, in Node, and on an edge runtime.
  *
  * One rule governs everything below: authorization decisions must come from
  * {@link AuthClient.verifyIdToken}, {@link AuthClient.verifyAccessToken} or
@@ -338,7 +333,7 @@ export class AuthClient {
 
     for (const [key, value] of Object.entries(options.extraParams || {})) {
       if (RESERVED_AUTHORIZE_PARAMS.has(key)) {
-        warnOnce(`reserved-authorize-param:${key}`, `Ignoring \`extraParams.${key}\`: the SDK owns that authorization parameter.`);
+        warnOnce(`reserved-authorize-param:${key}`, `Ignoring \`extraParams.${key}\`: the library owns that authorization parameter.`);
         continue;
       }
       url.searchParams.set(key, value);
@@ -355,6 +350,9 @@ export class AuthClient {
 
     if (options.prompt) url.searchParams.set("prompt", options.prompt);
     if (options.loginHint) url.searchParams.set("login_hint", options.loginHint);
+    if (typeof options.maxAge === "number" && Number.isFinite(options.maxAge) && options.maxAge >= 0) {
+      url.searchParams.set("max_age", String(Math.floor(options.maxAge)));
+    }
     if (options.acrValues) url.searchParams.set("acr_values", Array.isArray(options.acrValues) ? options.acrValues.join(" ") : options.acrValues);
 
     const persist = options.persist ?? this.hasStorage();
@@ -544,7 +542,7 @@ export class AuthClient {
    * Requests a new access token using a valid refresh token.
    *
    * Concurrent calls for the same refresh token share a single request: the identity provider rotates refresh tokens and revokes the whole family when one is replayed, so parallel refreshes would invalidate each other's session.
-   * The rotated token response is written back to storage when the SDK is already managing the stored tokens, so the new refresh token is not lost.
+   * The rotated token response is written back to storage when the library is already managing the stored tokens, so the new refresh token is not lost.
    *
    * @param options Set `persist` to force or suppress writing the result to storage.
    * @throws {TokenRefreshError} If the refresh fails.
@@ -625,6 +623,14 @@ export class AuthClient {
       if (!timingSafeEqual(asString(claims.nonce) || "", options.nonce)) throw new NonceMismatchError();
     }
 
+    if (options.requiredAcr !== undefined) {
+      const accepted = Array.isArray(options.requiredAcr) ? options.requiredAcr : [options.requiredAcr];
+      const presented = asString(claims.acr);
+      if (!presented || !accepted.includes(presented)) {
+        throw new ClaimValidationError(`The ID token's authentication context is "${presented || "none"}", which does not satisfy [${accepted.join(", ")}]. ` + "An authorization server may ignore `acr_values` and still return a valid token, so the request alone guarantees nothing.");
+      }
+    }
+
     if (options.maxAuthAgeSeconds !== undefined) {
       const authTime = asNumber(claims.auth_time);
       if (authTime === undefined) throw new ClaimValidationError("The ID token has no `auth_time` claim, so its authentication age cannot be checked.");
@@ -667,7 +673,7 @@ export class AuthClient {
     const subject = asString(claims.sub);
     if (!subject) throw new ClaimValidationError("The access token is missing the `sub` claim.");
 
-    const tokenUse = tokenUseOf(claims);
+    const tokenUse = this.classifyTokenUse(claims);
     if (tokenUse === "client" && !options.allowMachineTokens) throw new MachineTokenNotAllowedError(`This access token was issued to the client "${subject}" through the client_credentials grant, ` + "not to a user, so its `sub` is a client_id. Pass `{ allowMachineTokens: true }` and branch on " + "`tokenUse` if this endpoint serves both, or use `verifyMachineToken` if it only serves machines.", subject);
 
     const expiresAt = asNumber(claims.exp);
@@ -733,7 +739,7 @@ export class AuthClient {
    * Use it to render a name or avatar while a verification round-trip is in flight - never to decide what a caller may do. Call {@link AuthClient.verifyIdToken} for that.
    *
    * @param idToken The ID token to decode.
-   * @returns The unverified claims in the SDK's user shape.
+   * @returns The unverified claims in the library's user shape.
    * @throws {NoTokenError} If the ID token is malformed or cannot be decoded.
    */
   public decodeIdTokenUnsafe(idToken: string): UnverifiedUser {
@@ -757,7 +763,7 @@ export class AuthClient {
    * Any check built on its result can be bypassed by generating an unsigned JWT. Use {@link AuthClient.verifyIdToken} for authorization, or {@link AuthClient.decodeIdTokenUnsafe} when you knowingly want display-only claims.
    *
    * @param idToken The ID token obtained from a previous token exchange.
-   * @returns The unverified claims in the SDK's user shape.
+   * @returns The unverified claims in the library's user shape.
    * @throws {NoTokenError} If the ID token is invalid or cannot be parsed.
    */
   // eslint-disable-next-line @typescript-eslint/naming-convention -- frozen 1.x name
@@ -848,10 +854,20 @@ export class AuthClient {
    */
   private looksLikeMachineToken(token: string): boolean {
     try {
-      return isMachineToken(decodeTokenPayloadUnsafe(token));
+      return this.classifyTokenUse(decodeTokenPayloadUnsafe(token)) === "client";
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Decides whether verified claims describe a machine caller, honouring {@link AuthConfig.detectMachineToken}.
+   * A configured predicate replaces the built-in signals entirely, so a provider that marks machine tokens its own way is not fighting a default that disagrees.
+   */
+  private classifyTokenUse(claims: Record<string, unknown>): TokenUse {
+    const detect = this.config.detectMachineToken;
+    if (detect) return detect(claims) ? "client" : "user";
+    return tokenUseOf(claims);
   }
 
   /** Whether a token *claims* this client's audience. A routing hint, never a trust decision. */
@@ -1157,6 +1173,42 @@ export class AuthClient {
   }
 
   /**
+   * Turns an RFC 9470 challenge from a resource server into the authorization request that answers it.
+   *
+   * This is the portable step-up path: `acr_values` and `max_age` are OIDC Core, so it works against any conforming provider rather than needing an endpoint only some providers have.
+   *
+   * ```ts
+   * const challenge = readAuthenticationChallenge(res.headers.get("www-authenticate"));
+   * if (isStepUpChallenge(challenge)) {
+   *   const { url } = await client.createStepUpRequest(challenge);
+   *   return redirect(url);
+   * }
+   * ```
+   *
+   * Values in `options` win over the challenge, so a caller can tighten what the resource asked for but never has to accept less than it demanded by accident.
+   *
+   * Only `acr_values` and `max_age` are carried across. A challenge arrives from a resource server over the network, and those two can only ever ask for *stronger* authentication; a `scope` taken from the same header would let that server widen what the client requests on the user's behalf, so it is read into {@link AuthenticationChallenge.scope} and deliberately not applied.
+   *
+   * @param challenge A parsed challenge, or the raw `WWW-Authenticate` header.
+   * @param options Anything else the authorization request needs.
+   * @throws {AuthError} If the header cannot be parsed, or names neither `acr_values` nor `max_age`.
+   */
+  public async createStepUpRequest(challenge: AuthenticationChallenge | string, options: AuthorizeUrlOptions = {}): Promise<AuthorizeRequest> {
+    const parsed = typeof challenge === "string" ? readAuthenticationChallenge(challenge) : challenge;
+    if (!parsed) throw new AuthError("The WWW-Authenticate header could not be parsed as an authentication challenge.", "INVALID_CHALLENGE");
+
+    if (parsed.acrValues.length === 0 && parsed.maxAge === undefined) {
+      throw new AuthError("This challenge names neither `acr_values` nor `max_age`, so there is nothing to step up to. " + "Check `isStepUpChallenge()` first - a 401 without them is an ordinary authentication failure, and the answer to it is a plain login.", "INVALID_CHALLENGE");
+    }
+
+    return this.createAuthorizeUrl({
+      ...options,
+      acrValues: options.acrValues ?? (parsed.acrValues.length > 0 ? parsed.acrValues : undefined),
+      maxAge: options.maxAge ?? parsed.maxAge,
+    });
+  }
+
+  /**
    * Where the escalation API lives.
    * Assumed rather than discovered - escalation is not an OIDC endpoint, so the discovery document says nothing about it. {@link AuthConfig.escalationEndpoint} overrides.
    */
@@ -1413,14 +1465,15 @@ export class AuthClient {
   }
 }
 
-export * from "./types";
+export * from "./amr";
+export * from "./challenge";
+export * from "./device";
+export * from "./errors";
+export * from "./escalation";
+export { ALLOWED_ALGORITHMS, decodeTokenHeaderUnsafe, decodeTokenPayloadUnsafe, splitJwt } from "./jwt";
+export * from "./machine";
+export * from "./polling";
 export * from "./storage";
 export * from "./storage/CookieStorage";
-export * from "./errors";
+export * from "./types";
 export * from "./utils";
-export * from "./amr";
-export * from "./machine";
-export * from "./device";
-export * from "./escalation";
-export * from "./polling";
-export { ALLOWED_ALGORITHMS, decodeTokenHeaderUnsafe, decodeTokenPayloadUnsafe, splitJwt } from "./jwt";

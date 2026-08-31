@@ -1,5 +1,5 @@
 /**
- * Base class for every error this SDK throws.
+ * Base class for every error this library throws.
  *
  * Catch `AuthError` to handle any authentication failure, or a subclass to handle one cause.
  * Each carries a `code` - the messages are user-friendly, and may change between releases.
@@ -41,7 +41,7 @@ export class NonceMismatchError extends AuthError {
 }
 
 /**
- * Thrown when `/.well-known/openid-configuration` cannot be fetched, or is missing an endpoint the SDK requires (`authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `jwks_uri`).
+ * Thrown when `/.well-known/openid-configuration` cannot be fetched, or is missing an endpoint the library requires (`authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `jwks_uri`).
  */
 export class DiscoveryError extends AuthError {
   constructor(issuer: string) {
@@ -115,7 +115,7 @@ export class TokenVerificationError extends AuthError {
 }
 
 /**
- * Thrown when a token is cryptographically valid but carries a claim the SDK will not accept - a missing `sub`, an unrecognised `role`, an insufficient `amr`, etc.
+ * Thrown when a token is cryptographically valid but carries a claim the library will not accept - a missing `sub`, an unrecognised `role`, an insufficient `amr`, etc.
  */
 export class ClaimValidationError extends AuthError {
   constructor(message: string) {
@@ -160,7 +160,7 @@ export class SessionCheckUnavailableError extends AuthError {
 }
 
 /**
- * Thrown when the runtime provides no Web Crypto implementation, which the SDK requires for PKCE and for generating state/nonce values.
+ * Thrown when the runtime provides no Web Crypto implementation, which the library requires for PKCE and for generating state/nonce values.
  */
 export class CryptoUnavailableError extends AuthError {
   constructor() {
@@ -172,7 +172,7 @@ export class CryptoUnavailableError extends AuthError {
 /**
  * Thrown when a `client_credentials` access token is presented where a user is required.
  * A machine token's `sub` is a `client_id`, not a user identifier. Accepting one on a user path would hand back a client pretending to be a person.
- * The SDK refuses this by default and makes acceptance opt-in via `allowMachineTokens`, or explicit via {@link AuthClient.verifyMachineToken}.
+ * The library refuses this by default and makes acceptance opt-in via `allowMachineTokens`, or explicit via {@link AuthClient.verifyMachineToken}.
  */
 export class MachineTokenNotAllowedError extends AuthError {
   constructor(

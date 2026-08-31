@@ -4,7 +4,7 @@ identifier: storage
 order: 1
 ---
 
-The SDK persists exactly four values, and it will not guess where to put them.
+The library persists exactly four values, and it will not guess where to put them.
 
 | Key                         | Lifetime           | Purpose                                        |
 | --------------------------- | ------------------ | ---------------------------------------------- |
@@ -17,7 +17,7 @@ The bottom three are the interesting ones. They're written when you build the au
 URL and read after the provider redirects back - a _different request_, often to a
 different process. Somewhere durable across that redirect has to hold them. That "where"
 is the only thing that differs between a browser SPA, Next.js, Astro on Workers, and an
-Express app, so it's the only thing the SDK asks you to provide:
+Express app, so it's the only thing the library asks you to provide:
 
 ```ts
 interface AuthStorage {
@@ -39,7 +39,7 @@ interface AuthStorage {
 
 ## Writing your own
 
-There's no Astro or Express adapter shipped in the SDK, and there shouldn't be - an
+There's no Astro or Express adapter shipped in the library, and there shouldn't be - an
 adapter belongs next to the framework it adapts. Here's an Astro-on-Cloudflare-Workers one,
 in full, as a template:
 
@@ -119,7 +119,7 @@ Most of these are things that have actually broken:
    reuses the JWKS cache across requests).
 
 {% aside title="Remapping the token cookie name" %}
-`STORAGE_KEYS` is fixed at the SDK level. To put the token blob under a different cookie
+`STORAGE_KEYS` is fixed at the library level. To put the token blob under a different cookie
 name, map it inside your adapter - that's what the Next.js middleware's `cookieName`
 option does - rather than expecting the client to emit a different key.
 {% /aside %}

@@ -1,6 +1,6 @@
 # Security Policy
 
-This SDK verifies identity tokens and gates authorization decisions. A verification bug
+This library verifies identity tokens and gates authorization decisions. A verification bug
 here can mean a forged signature is accepted, a claim from the wrong audience is trusted,
 or a revoked session keeps working - please report it privately rather than opening a
 public issue.
@@ -31,8 +31,8 @@ Only the latest major version receives security fixes. See [CHANGELOG.md](CHANGE
 In scope: `@wilsoon/auth-core`, `@wilsoon/auth-react`, `@wilsoon/auth-next`, and this
 repository's own tooling (build config, CI).
 
-Out of scope: the identity provider you point this SDK at. If your provider itself has a
-vulnerability, report it to whoever runs it. A bug in this SDK's OIDC discovery,
+Out of scope: the identity provider you point this library at. If your provider itself has a
+vulnerability, report it to whoever runs it. A bug in this library's OIDC discovery,
 verification or storage handling **is** in scope even if it only manifests against a
 specific provider's behavior.
 

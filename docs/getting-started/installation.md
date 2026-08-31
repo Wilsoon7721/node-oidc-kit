@@ -32,7 +32,7 @@ it has seen production use. See [Machine tokens](/flows/machine-tokens).
 
 ## What your provider needs to offer
 
-Discovery does the work: set `issuer` and the SDK reads
+Discovery does the work: set `issuer` and the library reads
 `/.well-known/openid-configuration` for every endpoint. There are no hardcoded URLs on the
 hot path.
 
@@ -41,7 +41,7 @@ hot path.
 | `/.well-known/openid-configuration` with the four core endpoints | Every other endpoint is discovered from here                     | `DiscoveryError` at startup                                                  |
 | `issuer` in that document matching your configured `issuer`      | Stops tokens being validated against an issuer you didn't choose | `IssuerMismatchError` - set `expectedIssuer` if the difference is deliberate |
 | Authorization code flow with **PKCE (`S256`)**                   | The only flow implemented                                        | Nothing works                                                                |
-| **RS256** ID token signatures                                    | The SDK's allowlist is RS256 only                                | `ERR_JOSE_ALG_NOT_ALLOWED`                                                   |
+| **RS256** ID token signatures                                    | The library's allowlist is RS256 only                            | `ERR_JOSE_ALG_NOT_ALLOWED`                                                   |
 | `nonce` echoed into the ID token                                 | ID token replay protection, mandatory in the OIDC spec           | `NonceMismatchError` on every login                                          |
 
 {% callout type="tip" %}
@@ -50,12 +50,13 @@ Everything below `nonce` - `end_session_endpoint` for logout, `introspection_end
 
 ## Optional endpoints, and what they unlock
 
-Two flows need an endpoint beyond the core four, and both degrade to a clear error rather than a broken login when the provider doesn't offer them.
+Step-up needs nothing beyond the core four. The other two flows each need one more endpoint, and both degrade to a clear error rather than a broken login when the provider doesn't offer them.
 
 | Flow                                | Needs                                                | Without it                              |
 | ----------------------------------- | ---------------------------------------------------- | --------------------------------------- |
+| [Step-up](/flows/step-up)           | Nothing; it is OIDC Core plus RFC 9470               | Works against any conforming provider   |
 | [Device grant](/flows/device-grant) | `device_authorization_endpoint` in discovery         | `DeviceFlowError` naming the gap        |
-| [Escalation](/flows/escalation)     | `<issuer>/api/escalate`, or `escalationEndpoint` set | Provider-specific; not an OIDC endpoint |
+| [Escalation](/flows/escalation)     | `<issuer>/api/escalate`, or `escalationEndpoint` set | Provider extension; nothing to discover |
 
 ## Requirements
 
