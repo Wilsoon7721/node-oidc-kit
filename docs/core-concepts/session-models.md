@@ -5,7 +5,8 @@ order: 3
 ---
 
 Two shapes of session are supported, and which one you're in decides which methods you
-call.
+call. A third case - a caller with no session at all - is covered in
+[Machine tokens](/flows/machine-tokens).
 
 ## Per-application session - standard OIDC
 
@@ -60,6 +61,15 @@ const client = new AuthClient({
 token belongs to a sibling service - you don't call `verifyPlatformSession()` yourself in
 the common case.
 
+## No session at all
+
+A `client_credentials` caller has no user, so none of this applies to it. Every method on
+this page refuses a machine token rather than inventing a session for it: `resolveSession()`
+and `verifyPlatformSession()` throw `MachineTokenNotAllowedError`, and so does
+`isSessionCurrent()`, because there is no user record for a revocation to act on.
+
+Verify those callers with `verifyMachineToken()` instead.
+
 ## Session revocation
 
 A JWT stays valid until it expires, so "sign out everywhere" doesn't take effect on its
@@ -86,7 +96,5 @@ Without either route configured, `isSessionCurrent()` throws
 `SessionCheckUnavailableError` rather than assuming the session is still valid.
 {% /callout %}
 
-## Next
-
-[Storage](/core-concepts/storage) if you haven't read it yet - every code sample above
-needs somewhere to persist `state`, `nonce` and the PKCE verifier across the redirect.
+Machine tokens cannot be revoked at all - the grant issues no refresh token for revocation
+to act on - so a short lifetime is the only control there.

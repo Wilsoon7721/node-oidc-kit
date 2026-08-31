@@ -4,10 +4,13 @@ import {
     AuthClient,
     ClaimValidationError,
     DiscoveryError,
+    isMachineToken,
     IssuerMismatchError,
+    MachineTokenNotAllowedError,
     MemoryStorage,
     NonceMismatchError,
     NoTokenError,
+    NotAMachineTokenError,
     TokenVerificationError,
 } from '../src/index';
 import { API_AUDIENCE, CLIENT_ID, OTHER_CLIENT_ID, attackerKeys, startFakeIdp, unsignedToken, type FakeIdp } from './fake-idp';
@@ -257,5 +260,114 @@ describe('unverified decode paths', () => {
 
     it('getUser rejects an ID token before it reaches the network', async () => {
         await expect(client().getUser(await idp.mintIdToken())).rejects.toThrow(ClaimValidationError);
+    });
+});
+
+describe('machine tokens (client_credentials)', () => {
+    const MACHINE_CLIENT = 'svc-reporting';
+
+    /** What the provider mints for `grant_type=client_credentials`: `sub` is the client, and there is no scope. */
+    const mintMachineToken = (claims: Record<string, unknown> = {}) => idp.mintAccessToken({
+        sub: MACHINE_CLIENT,
+        client_id: MACHINE_CLIENT,
+        token_use: 'client',
+        scope: undefined,
+        ...claims,
+    });
+
+    const confidential = () => new AuthClient({
+        clientId: CLIENT_ID,
+        issuer: idp.issuer,
+        apiAudience: API_AUDIENCE,
+        clientSecret: 'shh',
+    }, new MemoryStorage());
+
+    it('refuses a machine token on verifyAccessToken by default', async () => {
+        await expect(client().verifyAccessToken(await mintMachineToken()))
+            .rejects.toThrow(MachineTokenNotAllowedError);
+    });
+
+    it('names the offending client on the refusal, so the caller can tell who called', async () => {
+        await client().verifyAccessToken(await mintMachineToken()).catch((error: MachineTokenNotAllowedError) => {
+            expect(error.code).toBe('MACHINE_TOKEN_NOT_ALLOWED');
+            expect(error.clientId).toBe(MACHINE_CLIENT);
+        });
+        expect.assertions(2);
+    });
+
+    it('accepts one when the caller opts in, and marks it as a client', async () => {
+        const claims = await client().verifyAccessToken(await mintMachineToken(), { allowMachineTokens: true });
+
+        expect(claims.tokenUse).toBe('client');
+        expect(claims.subject).toBe(MACHINE_CLIENT);
+        expect(claims.scopes).toEqual([]);
+    });
+
+    it('marks an ordinary user token as a user', async () => {
+        const claims = await client().verifyAccessToken(await idp.mintAccessToken());
+
+        expect(claims.tokenUse).toBe('user');
+        expect(claims.subject).toBe('user-1');
+    });
+
+    it('verifyMachineToken returns a client identity with no user fields on it', async () => {
+        const machine = await client().verifyMachineToken(await mintMachineToken());
+
+        expect(machine.clientId).toBe(MACHINE_CLIENT);
+        expect(machine.tokenUse).toBe('client');
+        expect(machine.audience).toContain(API_AUDIENCE);
+        expect('id' in machine).toBe(false);
+        expect('role' in machine).toBe(false);
+        expect('authMethods' in machine).toBe(false);
+    });
+
+    it('verifyMachineToken refuses a user token, so the check runs in both directions', async () => {
+        await expect(client().verifyMachineToken(await idp.mintAccessToken()))
+            .rejects.toThrow(NotAMachineTokenError);
+    });
+
+    it('still enforces the signature: a forged token_use buys nothing', async () => {
+        const forged = unsignedToken({
+            sub: MACHINE_CLIENT,
+            token_use: 'client',
+            iss: idp.issuer,
+            aud: API_AUDIENCE,
+            exp: Math.floor(Date.now() / 1000) + 3600,
+        });
+
+        await expect(client().verifyMachineToken(forged)).rejects.toThrow(TokenVerificationError);
+    });
+
+    it('still enforces the audience: a machine token for another API is rejected', async () => {
+        const elsewhere = await idp.mintAccessToken(
+            { sub: MACHINE_CLIENT, token_use: 'client' },
+            { audience: 'https://other-api.example.com' }
+        );
+
+        await expect(client().verifyMachineToken(elsewhere)).rejects.toThrow(TokenVerificationError);
+    });
+
+    it('refuses to resolve a platform session from a machine token', async () => {
+        await expect(confidential().verifyPlatformSession(await mintMachineToken()))
+            .rejects.toThrow(MachineTokenNotAllowedError);
+    });
+
+    it('refuses to resolve a session from a cookie holding a machine token', async () => {
+        await expect(confidential().resolveSession({ access_token: await mintMachineToken() }))
+            .rejects.toThrow(MachineTokenNotAllowedError);
+    });
+
+    it('refuses a session-version check on a machine token rather than failing as undeterminable', async () => {
+        await expect(confidential().isSessionCurrent(
+            { id: MACHINE_CLIENT, sessionVersion: 1 },
+            { token: await mintMachineToken() }
+        )).rejects.toThrow(MachineTokenNotAllowedError);
+    });
+
+    it('isMachineToken reads the claim, and defaults everything else to a user', () => {
+        expect(isMachineToken({ token_use: 'client' })).toBe(true);
+        expect(isMachineToken({ token_use: 'user' })).toBe(false);
+        expect(isMachineToken({})).toBe(false);
+        expect(isMachineToken(null)).toBe(false);
     });
 });

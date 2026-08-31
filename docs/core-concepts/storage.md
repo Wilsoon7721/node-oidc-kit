@@ -123,8 +123,3 @@ Most of these are things that have actually broken:
 name, map it inside your adapter - that's what the Next.js middleware's `cookieName`
 option does - rather than expecting the client to emit a different key.
 {% /aside %}
-
-## Next
-
-[Security model](/core-concepts/security-model) - what each verification method actually
-checks, and why the type system won't let you skip it.

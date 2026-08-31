@@ -18,6 +18,18 @@ npm install @wilsoon/auth-react
 npm install @wilsoon/auth-next
 ```
 
+Server-to-server calls with no user involved need a different package, installed on its own:
+
+```bash
+npm install @wilsoon/auth-machine
+```
+
+{% callout type="note" title="auth-machine is 0.x, and stands alone" %}
+It has no dependency on `@wilsoon/auth-core`, so it is versioned independently of the other
+three rather than sharing their 2.x line. `0.x` reflects that its API may still move before
+it has seen production use. See [Machine tokens](/flows/machine-tokens).
+{% /callout %}
+
 ## What your provider needs to offer
 
 Discovery does the work: set `issuer` and the SDK reads
@@ -33,17 +45,23 @@ hot path.
 | `nonce` echoed into the ID token                                 | ID token replay protection, mandatory in the OIDC spec           | `NonceMismatchError` on every login                                          |
 
 {% callout type="tip" %}
-Everything below `nonce` - `end_session_endpoint` for logout, `introspection_endpoint` for
-live revocation - is optional and degrades cleanly. You lose one feature, not the whole
-login. See [Pointing it at your own provider](/core-concepts/your-own-provider) for the
-full picture, including the handful of things that are still specific to one reference
-provider.
+Everything below `nonce` - `end_session_endpoint` for logout, `introspection_endpoint` for live revocation - is optional and degrades cleanly. You lose one feature, not the whole login. See [Pointing it at your own provider](/core-concepts/your-own-provider) for the full picture, including the handful of things that are still specific to one reference provider.
 {% /callout %}
+
+## Optional endpoints, and what they unlock
+
+Two flows need an endpoint beyond the core four, and both degrade to a clear error rather than a broken login when the provider doesn't offer them.
+
+| Flow                                | Needs                                                | Without it                              |
+| ----------------------------------- | ---------------------------------------------------- | --------------------------------------- |
+| [Device grant](/flows/device-grant) | `device_authorization_endpoint` in discovery         | `DeviceFlowError` naming the gap        |
+| [Escalation](/flows/escalation)     | `<issuer>/api/escalate`, or `escalationEndpoint` set | Provider-specific; not an OIDC endpoint |
 
 ## Requirements
 
-Node.js 18+, any modern browser, or an edge runtime with `fetch` and the Web Crypto API
-(`globalThis.crypto`). There are no Node-only imports anywhere in the dependency graph.
+Node.js 18+, any modern browser, or an edge runtime with `fetch` and the Web Crypto API (`globalThis.crypto`). There are no Node-only imports anywhere in the dependency graph.
+
+`@wilsoon/auth-machine` is server-only and throws if it finds a `window` - it holds a client secret, so it must never reach a browser bundle.
 
 ## Next
 

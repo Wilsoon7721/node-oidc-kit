@@ -1,6 +1,6 @@
 # Integrating an application - guide for SDK v2.0
 
-For wiring an application up to an OIDC provider with `@wilsoon/auth-core`, `@wilsoon/auth-react` or `@wilsoon/auth-next`.
+For wiring an application up to an OIDC provider with `@wilsoon/auth-core`, `@wilsoon/auth-react`, `@wilsoon/auth-next` or `@wilsoon/auth-machine`.
 
 Read [Is the flow different now?](#is-the-flow-different-now) first if you already have a working 1.x integration, then jump to the recipe for your stack.
 
@@ -19,6 +19,8 @@ Read [Is the flow different now?](#is-the-flow-different-now) first if you alrea
 - [Recipe 5 - Astro on Cloudflare Workers](#recipe-5--astro-on-cloudflare-workers)
 - [Do I have to change every `user.role` check?](#do-i-have-to-change-every-userrole-check)
 - [Authorization: role, amr, step-up](#authorization-role-amr-step-up)
+- [Recipe 6 - CLI sign-in with the device grant](#recipe-6--cli-sign-in-with-the-device-grant)
+- [Recipe 7 - Server-to-server with no user](#recipe-7--server-to-server-with-no-user)
 - [Session revocation](#session-revocation)
 - [Logout](#logout)
 - [Troubleshooting by error code](#troubleshooting-by-error-code)
@@ -92,6 +94,7 @@ Anything else is either display-only or forgeable:
 | `getUser()`, `hydrateSession()`                       | ❌ not in the type                 | the userinfo endpoint returns profile claims only                          |
 | `parseIdToken()`, `decodeIdTokenUnsafe()`             | ⚠️ present but unverified          | anyone can mint a JWT with `role: "admin"` and an empty signature          |
 | `useAuth().user` in the browser                       | only when `user.verified === true` | and even then it is for rendering, not access control                      |
+| A `client_credentials` token                          | ❌ there is no user at all         | its `sub` is a `client_id`; verify with `verifyMachineToken()`             |
 
 ---
 
@@ -802,6 +805,25 @@ await client.createAuthorizeUrl({ prompt: "reauthenticate", acrValues: ["mfa"] }
 // or in React: login({ prompt: 'reauthenticate', acrValues: ['mfa'] })
 ```
 
+That restarts the login. **Escalation** is the other option: the session survives, the user
+proves one extra thing, and you get back a token proving it happened.
+
+```ts
+const result = await client.reauthorize(["passkey", "fido"], true, {
+  idTokenHint: tokens.id_token, // required for a public client
+  openUrl: (url) => redirect(url), // or print it, in a CLI
+});
+
+if (result.alreadySatisfied) {
+  // force: false and the session already qualified - the user saw nothing.
+}
+```
+
+A denial throws `AuthorizationDeniedError` and an expiry throws
+`AuthorizationExpiredError`, because those are different facts: in one the user answered,
+in the other they never did. Hand `result.escalationToken` to a resource server rather than
+a boolean - a boolean from your own code proves nothing to anybody else.
+
 And to require a _recent_ authentication:
 
 ```ts
@@ -811,6 +833,86 @@ await client.verifyIdToken(idToken, { maxAuthAgeSeconds: 300 });
 `role` is validated at the boundary: an unrecognised value throws `ClaimValidationError`
 rather than being asserted into `'admin' | 'user'`, and an absent one becomes the
 least-privileged `'user'`.
+
+---
+
+## Recipe 6 - CLI sign-in with the device grant
+
+For a client that can print a string but cannot host a redirect URI. The application must be
+registered for the device grant, or the first call is refused with `unauthorized_client`.
+
+```ts
+import { AuthClient } from "@wilsoon/auth-core";
+
+const client = new AuthClient({ clientId: CLI_CLIENT_ID, issuer: OIDC_ISSUER });
+
+const { user, tokens } = await client.authorizeDevice({
+  scope: ["openid", "profile", "email", "offline_access"],
+  onUserCode: ({ userCode, verificationUri, verificationUriComplete }) => {
+    console.log(`\n  Go to ${verificationUri}`);
+    console.log(`  Enter code: ${userCode}\n`);
+    console.log(`  Or open: ${verificationUriComplete}`);
+  },
+});
+
+console.log(`Signed in as ${user?.email}`);
+```
+
+Show the code **and** the plain URI even when `verificationUriComplete` exists - the approval
+page displays the code it resolved, so a user who followed a link can check it against what
+the terminal printed.
+
+Request `offline_access` if the CLI should keep working after the access token expires,
+which for a tool signed into once is usually the point.
+
+The `acr` on the resulting token is the acr of **the browser session that approved it** - the
+device never sees a session, so it asserts nothing about the authentication itself.
+
+---
+
+## Recipe 7 - Server-to-server with no user
+
+A scheduled job or one service calling another. There is no user anywhere in this exchange,
+so it needs a different package: `@wilsoon/auth-machine`, which is server-only and currently
+0.x.
+
+```bash
+npm install @wilsoon/auth-machine
+```
+
+```ts
+import { createMachineClient } from "@wilsoon/auth-machine";
+
+const machine = createMachineClient({
+  issuer: process.env.OIDC_ISSUER!,
+  clientId: process.env.OIDC_CLIENT_ID!,
+  clientSecret: process.env.OIDC_CLIENT_SECRET!, // confidential clients only
+});
+
+// Cached, single-flighted, renewed ahead of expiry, one retry on a 401.
+const res = await machine.fetch("https://api.example.com/reports");
+```
+
+On the **receiving** side, in your resource server, the important part:
+
+```ts
+// Only machines may call this endpoint.
+const caller = await client.verifyMachineToken(token, { audience: API_AUDIENCE });
+caller.clientId; // there is no user to read, by design
+
+// Or serve both, and branch:
+const claims = await client.verifyAccessToken(token, { allowMachineTokens: true });
+if (claims.tokenUse === "client") return serveMachine(claims.subject);
+```
+
+Without `allowMachineTokens`, `verifyAccessToken()` throws `MachineTokenNotAllowedError`.
+That default is the point: a machine token verifies identically to a user token, but its
+`sub` is a `client_id`, so an endpoint written for users would otherwise treat a service as
+a person and never notice.
+
+Three constraints come from the grant itself: it accepts **no scope**, issues **no refresh
+token**, and its tokens **cannot be revoked** - rotating the secret stops new issuance but
+leaves outstanding tokens valid until they expire.
 
 ---
 
@@ -892,6 +994,12 @@ Two things to know:
 | Session works right after login, then goes null             | Model A without `apiAudience`/`clientSecret`: a sibling service overwrote the shared cookie | Configure the platform path - see [Two session models](#two-session-models--pick-yours-first)                         |
 | `CRYPTO_UNAVAILABLE`                                        | Runtime has no Web Crypto                                                                   | Node.js 18+, a modern browser, or an edge runtime                                                                     |
 | `DISCOVERY_FAILED`                                          | `/.well-known/openid-configuration` unreachable or incomplete                               | Check the issuer URL and network egress                                                                               |
+| `MACHINE_TOKEN_NOT_ALLOWED`                                 | A `client_credentials` token reached a path that expects a user                             | Pass `allowMachineTokens: true` and branch on `tokenUse`, or use `verifyMachineToken()`                               |
+| `NOT_A_MACHINE_TOKEN`                                       | A user token was passed to `verifyMachineToken()`                                           | Use `verifyAccessToken()` for user tokens                                                                             |
+| `ACCESS_DENIED`                                             | The user refused a step-up or a device authorization                                        | Expected; tell them what was declined rather than retrying                                                            |
+| `EXPIRED_TOKEN`                                             | The escalation or device code passed its deadline                                           | Start the flow again. Only the server decides this - don't add a client-side timeout                                  |
+| `ESCALATION_FAILED`                                        | Unknown method (`invalid_use`), unusable `id_token_hint`, or an unknown subject              | Check `use` against what the provider supports, and pass an `idTokenHint` you were issued                             |
+| `DEVICE_FLOW_FAILED`                                        | Not registered for the grant, device code already redeemed, or no endpoint advertised       | Enable the grant on the client; device codes are single use                                                           |
 
 ---
 

@@ -1,4 +1,4 @@
-# @wilsoon/auth-core / auth-react / auth-next 
+# @wilsoon/auth-core / auth-react / auth-next / auth-machine
 
 A small, framework-agnostic OpenID Connect **relying party** for TypeScript - the client
 half of OIDC, not the provider. Point it at any conforming issuer, get back a verified
@@ -13,7 +13,7 @@ const { user } = await client.handleCallback(request.url);
 //    ^ signature, issuer, audience, expiry and nonce all checked. Safe to authorize on.
 ```
 
-Three packages, ~3,000 lines of source, one runtime dependency
+Four packages, one runtime dependency
 ([`jose`](https://github.com/panva/jose)), and no Node-only imports - just `fetch` and Web
 Crypto. It runs in a browser, in Node 18+, and on edge runtimes like Cloudflare Workers.
 
@@ -25,6 +25,7 @@ Full documentation, with slightly more depth than this README, is at
 - [Why this exists](#why-this-exists)
 - [Packages](#packages)
 - [Quick start](#quick-start)
+- [Beyond the login flow](#beyond-the-login-flow)
 - [Pointing it at your own provider](#pointing-it-at-your-own-provider)
 - [Storage: the one thing to understand](#storage-the-one-thing-to-understand)
 - [The security model](#the-security-model)
@@ -47,8 +48,11 @@ As such, I built this authentication library in order to plug my provider into a
 | [`@wilsoon/auth-core`](packages/auth-core)   | The client: discovery, PKCE, code exchange, token verification, introspection, `amr` policies. Framework-agnostic. | `jose`                |
 | [`@wilsoon/auth-react`](packages/auth-react) | `<AuthProvider>` and `useAuth()` for browser session state.                                                        | core, React ≥16       |
 | [`@wilsoon/auth-next`](packages/auth-next)   | `getSession()`, `requireSession()`, `createAuthMiddleware()`, `ServerCookieStorage`.                               | core, React, Next ≥14 |
+| [`@wilsoon/auth-machine`](packages/auth-machine) | `client_credentials` tokens for server-to-server calls, with caching and single-flight. **0.x**, standalone.  | nothing               |
 
 Using anything else - Astro, SvelteKit, Hono, Express? Use `auth-core` directly and write one [storage adapter](#storage-the-one-thing-to-understand). That's the whole integration.
+
+The first three are versioned together on a shared 2.x line. `auth-machine` has no dependency on the others, so it is versioned independently and is currently 0.x.
 
 For end-to-end recipes per framework, see **[INTEGRATION.md](INTEGRATION.md)**; for what
 changed in 2.0 and how to migrate from 1.x, see **[CHANGELOG.md](CHANGELOG.md)**. This README
@@ -221,19 +225,41 @@ To put the token blob under a different cookie name, map it inside your adapter 
 
 ## The security model
 
-**Only three methods** produce a value you may base authorization decisions on:
+**Only five methods** produce a value you may base authorization decisions on:
 
-| Method                                    | Verified?                                     | Gives you                                                                   |
-| ----------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------- |
-| `verifyIdToken()`                         | Signature, `iss`, `aud`, `exp`, `nonce`       | `AuthenticatedUser` - `role`, `authMethods`, `sessionVersion`               |
-| `verifyAccessToken()`                     | Signature, `iss`, pinned `aud`, `exp`, scopes | `AccessTokenClaims` - no role, as access tokens don't carry one             |
-| `verifyPlatformSession()`                 | The above + introspection                     | `AuthenticatedUser` with **current** role and session version               |
-| `getUser()` / `hydrateSession()`          | Transport only                                | `ProfileUser` - display claims, no `role` field to prevent potential misuse |
-| `decodeIdTokenUnsafe()`, `parseIdToken()` | **Nothing**                                   | `UnverifiedUser` - may be attacker-controlled by definition                 |
+| Method                                    | Verified?                                      | Gives you                                                                   |
+| ----------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------- |
+| `verifyIdToken()`                         | Signature, `iss`, `aud`, `exp`, `nonce`, `evt` | `AuthenticatedUser` - `role`, `authMethods`, `sessionVersion`               |
+| `verifyAccessToken()`                     | Signature, `iss`, pinned `aud`, `exp`, scopes  | `AccessTokenClaims` - no role, plus `tokenUse`                              |
+| `verifyPlatformSession()`                 | The above + introspection                      | `AuthenticatedUser` with **current** role and session version               |
+| `verifyMachineToken()`                    | The access token checks, plus `token_use`      | `MachineClient` - a `clientId`, and deliberately no user fields             |
+| `verifyEscalationToken()`                 | Signature, `iss`, `aud`, `exp`, `evt`          | `VerifiedEscalation` - proof one step-up happened                           |
+| `getUser()` / `hydrateSession()`          | Transport only                                 | `ProfileUser` - display claims, no `role` field to prevent potential misuse |
+| `decodeIdTokenUnsafe()`, `parseIdToken()` | **Nothing**                                    | `UnverifiedUser` - may be attacker-controlled by definition                 |
 
 `isTokenNearExpiry()` is a refresh _hint_ read from an unverified payload, not a gate. Unparseable or no `exp` field means expired.
 
 Client-side checks are for rendering only. Every authorization decision should be made on the server, where `getSession()` / `requireSession()` verify per request.
+
+Three token kinds share an issuer, an audience and an algorithm, and differ only by a claim. A **machine token**'s `sub` is a `client_id` rather than a person, so `verifyAccessToken()` refuses one unless you pass `allowMachineTokens`, and the session methods refuse it outright. An **escalation token** carries `evt: "escalation"`; `verifyIdToken()` refuses any token with an `evt` at all, so a step-up proof cannot verify as a login.
+
+## Beyond the login flow
+
+Three flows past authorization-code-plus-PKCE, documented in full at [docs.wilsoon.dev/node-oidc-kit](https://docs.wilsoon.dev/node-oidc-kit).
+
+```ts
+// Step-up: require a stronger method for one action.
+await client.reauthorize(["passkey", "fido"], true, { idTokenHint, openUrl });
+
+// Device grant (RFC 8628): sign in a CLI with no redirect URI.
+const { user } = await client.authorizeDevice({ onUserCode });
+
+// Machine tokens: a server calling an API as itself.
+const machine = createMachineClient({ issuer, clientId, clientSecret });
+await machine.fetch("https://api.example.com/reports");
+```
+
+Escalation and the device grant share one polling loop, because the provider answers both with RFC 8628's vocabulary. In both, **the server owns the deadline**: the loop polls until the provider reports `expired_token` rather than timing out on its own clock, since a client-side timer that fires first turns a server-authoritative answer into a guess.
 
 ## Things that are still specific to one provider
 

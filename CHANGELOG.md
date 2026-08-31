@@ -1,7 +1,57 @@
 # Changelog
 
-All three packages (`@wilsoon/auth-core`, `@wilsoon/auth-react`, `@wilsoon/auth-next`) are
-versioned together.
+The three original packages (`@wilsoon/auth-core`, `@wilsoon/auth-react`,
+`@wilsoon/auth-next`) are versioned together. `@wilsoon/auth-machine` has no dependency on
+them and is versioned independently, starting at 0.x.
+
+## Unreleased
+
+Three flows past authorization-code-plus-PKCE, and a new package for the last of them.
+
+### Added - `@wilsoon/auth-core`
+
+- `reauthorize(use, force, options)` - method escalation (step-up), with
+  `createEscalation()`, `pollEscalation()` and `verifyEscalationToken()` underneath for
+  callers that need to own the loop.
+- `authorizeDevice(options)` - the RFC 8628 device authorization grant, with
+  `requestDeviceCode()` and `pollDeviceToken()` underneath. Reads
+  `device_authorization_endpoint` from discovery.
+- `verifyMachineToken()` - verifies a `client_credentials` token and returns a
+  `MachineClient`, which deliberately has no `id`, `role` or `authMethods`. Refuses user
+  tokens, so the check runs in both directions.
+- `tokenUse` on `AccessTokenClaims`, and `isMachineToken(claims)`.
+- `pollUntilResolved()` and the polling types, shared by escalation and the device grant -
+  the provider answers both with the same RFC 8628 vocabulary, so one state machine drives
+  both.
+- `escalationEndpoint` on `AuthConfig`, since escalation is not an OIDC endpoint and cannot
+  be discovered.
+- Errors: `MachineTokenNotAllowedError`, `NotAMachineTokenError`,
+  `AuthorizationDeniedError`, `AuthorizationExpiredError`, `EscalationError`,
+  `DeviceFlowError`.
+
+### Changed - `@wilsoon/auth-core`
+
+Both changes tighten what is accepted. Neither removes or renames anything.
+
+- **`verifyAccessToken()` refuses `client_credentials` tokens by default.** A machine token
+  verifies identically to a user token but its `sub` is a `client_id`, so an endpoint that
+  resolves `sub` to a person would have accepted a client dressed as a user. Pass
+  `allowMachineTokens: true` and branch on `tokenUse` to serve both.
+  `verifyPlatformSession()`, `resolveSession()` and `isSessionCurrent()` refuse outright -
+  there is no user to resolve a session for, and nothing to revoke against.
+- **`verifyIdToken()` refuses any token carrying an `evt` claim.** An escalation token is
+  RS256, from the same issuer, audienced to the same client; `evt` was the only thing
+  separating a proof that one action was authorised from a proof that a user is signed in.
+  Real ID tokens never carry `evt`.
+
+### Added - `@wilsoon/auth-machine` 0.1.0
+
+New package, server-only, zero dependencies. Obtains `client_credentials` tokens; the
+grant is a form POST, and the package exists for what surrounds it - single-flight so
+concurrent callers on a cold cache produce one token request, refresh-ahead at 75% of the
+lifetime rather than at `exp`, and exactly one forced retry on a 401.
+
+Verification stays in `@wilsoon/auth-core`: this package only obtains tokens.
 
 ## 2.0.0
 

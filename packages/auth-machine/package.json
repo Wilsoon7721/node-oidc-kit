@@ -1,23 +1,22 @@
 {
-  "name": "@wilsoon/auth-core",
-  "version": "2.1.0",
-  "description": "Framework-agnostic OpenID Connect relying party: discovery, PKCE, and token verification for browsers, Node and edge runtimes",
+  "name": "@wilsoon/auth-machine",
+  "version": "0.1.0",
+  "description": "Server-only OAuth 2.0 client_credentials tokens with caching, single-flight and refresh-ahead",
   "keywords": [
-    "oidc",
-    "openid-connect",
     "oauth2",
-    "pkce",
-    "jwt",
-    "authentication",
-    "jose",
-    "sso"
+    "client-credentials",
+    "machine-to-machine",
+    "m2m",
+    "service-account",
+    "token-cache",
+    "oidc"
   ],
   "author": "Wilson Oon",
-  "homepage": "https://github.com/Wilsoon7721/node-oidc-kit/tree/main/packages/auth-core#readme",
+  "homepage": "https://github.com/Wilsoon7721/node-oidc-kit/tree/main/packages/auth-machine#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Wilsoon7721/node-oidc-kit.git",
-    "directory": "packages/auth-core"
+    "directory": "packages/auth-machine"
   },
   "bugs": {
     "url": "https://github.com/Wilsoon7721/node-oidc-kit/issues"
@@ -47,9 +46,6 @@
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"
-  },
-  "dependencies": {
-    "jose": "^5.10.0"
   },
   "engines": {
     "node": ">=18"

@@ -2,39 +2,54 @@
   "project": "node-oidc-kit",
   "sections": {
     "core-concepts/security-model": {
-      "hash": "b77cf8bb943e9813217ed6c42ffd0de0475d2f589198be90886c3fc6b67f62a2",
-      "published": "b77cf8bb943e9813217ed6c42ffd0de0475d2f589198be90886c3fc6b67f62a2",
-      "pushedAt": "2026-08-21T19:16:36.138Z"
+      "hash": "9275c961660aa7ee2b2a5b845f55af4aea395d5e87af0deb4ba2e445e565d0d7",
+      "published": "9275c961660aa7ee2b2a5b845f55af4aea395d5e87af0deb4ba2e445e565d0d7",
+      "pushedAt": "2026-08-31T08:25:48.336Z"
     },
     "core-concepts/session-models": {
-      "hash": "2bab7bfc971b542e676731fe4d03b6e9dbaf5416d162ec77c87b52193d0b76a3",
-      "published": "2bab7bfc971b542e676731fe4d03b6e9dbaf5416d162ec77c87b52193d0b76a3",
-      "pushedAt": "2026-08-21T19:16:36.197Z"
+      "hash": "5e5a6119491a5a522816a385eca9668aab208a65d400cd02af4c790744dfd9c7",
+      "published": "5e5a6119491a5a522816a385eca9668aab208a65d400cd02af4c790744dfd9c7",
+      "pushedAt": "2026-08-31T08:25:48.543Z"
     },
     "core-concepts/storage": {
-      "hash": "538fde89eb64fd0fb92f95cc52726bb8f17922c7f8ea1901195dd0318fca3dd4",
-      "published": "538fde89eb64fd0fb92f95cc52726bb8f17922c7f8ea1901195dd0318fca3dd4",
-      "pushedAt": "2026-08-21T19:16:36.255Z"
+      "hash": "9c24b1958af56794b3f489cca3ce5ffe36b6c83f71b620785690d7086e05911d",
+      "published": "9c24b1958af56794b3f489cca3ce5ffe36b6c83f71b620785690d7086e05911d",
+      "pushedAt": "2026-08-31T08:25:48.830Z"
     },
     "core-concepts/your-own-provider": {
-      "hash": "71bf41e93cad229aa846d85d8e56b2ab3e6d60e8d685ca4771fa18d9048d7362",
-      "published": "71bf41e93cad229aa846d85d8e56b2ab3e6d60e8d685ca4771fa18d9048d7362",
-      "pushedAt": "2026-08-21T19:16:36.305Z"
+      "hash": "cd9a94aabd4003e166eaa8aa4713dd21d704b9786caeb437b2afa47cc966e23d",
+      "published": "cd9a94aabd4003e166eaa8aa4713dd21d704b9786caeb437b2afa47cc966e23d",
+      "pushedAt": "2026-08-31T08:25:48.930Z"
     },
     "getting-started/installation": {
-      "hash": "bbd7d52173a02f1a93e804b12e9a0fe1c77e7a760d857683adb1fd3414fffe71",
-      "published": "bbd7d52173a02f1a93e804b12e9a0fe1c77e7a760d857683adb1fd3414fffe71",
-      "pushedAt": "2026-08-21T19:16:36.350Z"
+      "hash": "4c8577e6190fb6e261a7d89d1ab5d82f8ec68c5fa3baab316822d6133aa0a063",
+      "published": "4c8577e6190fb6e261a7d89d1ab5d82f8ec68c5fa3baab316822d6133aa0a063",
+      "pushedAt": "2026-08-31T08:25:49.441Z"
     },
     "getting-started/introduction": {
-      "hash": "ed76b9addf6f4259f18bedab1f2d4989c7071be14321423690c1f53f1c6bc814",
-      "published": "ed76b9addf6f4259f18bedab1f2d4989c7071be14321423690c1f53f1c6bc814",
-      "pushedAt": "2026-08-21T19:16:36.408Z"
+      "hash": "946eba964b92462961e453874ab7fa457bf755067c0d3f8f606f31f71f7c036d",
+      "published": "946eba964b92462961e453874ab7fa457bf755067c0d3f8f606f31f71f7c036d",
+      "pushedAt": "2026-08-31T08:25:49.633Z"
     },
     "getting-started/quick-start": {
-      "hash": "9b2c736b2a89ffc3a20c7d2913c4662422d349b2e731bee6c98b594dd093f349",
-      "published": "9b2c736b2a89ffc3a20c7d2913c4662422d349b2e731bee6c98b594dd093f349",
-      "pushedAt": "2026-08-21T19:16:36.459Z"
+      "hash": "aa1c75b21542d6ae6d6e26ba96b6ae62afef1710442c26c6dad235fba39c3b41",
+      "published": "aa1c75b21542d6ae6d6e26ba96b6ae62afef1710442c26c6dad235fba39c3b41",
+      "pushedAt": "2026-08-31T08:25:49.721Z"
+    },
+    "flows/device-grant": {
+      "hash": "0b9380f506f64a07e5dc5abe08fea21ad0afc7448bfb41450dcf0e7952159bb7",
+      "published": "0b9380f506f64a07e5dc5abe08fea21ad0afc7448bfb41450dcf0e7952159bb7",
+      "pushedAt": "2026-08-31T08:25:49.120Z"
+    },
+    "flows/escalation": {
+      "hash": "b6fb65afc8d0771e406556601fa556a68dc25cf05af925b3c0656a52140fd707",
+      "published": "b6fb65afc8d0771e406556601fa556a68dc25cf05af925b3c0656a52140fd707",
+      "pushedAt": "2026-08-31T08:25:49.249Z"
+    },
+    "flows/machine-tokens": {
+      "hash": "5dec8f1e0a580598ec3fbd9c4fb76cb1ee16eff45cd8ac955c0c091c722ed4b5",
+      "published": "5dec8f1e0a580598ec3fbd9c4fb76cb1ee16eff45cd8ac955c0c091c722ed4b5",
+      "pushedAt": "2026-08-31T08:25:49.352Z"
     }
   }
 }

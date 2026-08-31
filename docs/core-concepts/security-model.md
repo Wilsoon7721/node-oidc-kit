@@ -4,15 +4,17 @@ identifier: security-model
 order: 2
 ---
 
-One rule governs the whole SDK: **only three methods produce a value you may authorize on.**
+One rule governs the whole SDK: **only five methods produce a value you may authorize on.**
 
-| Method                                    | Verified?                                     | Gives you                                                              |
-| ----------------------------------------- | --------------------------------------------- | ---------------------------------------------------------------------- |
-| `verifyIdToken()`                         | Signature, `iss`, `aud`, `exp`, `nonce`       | `AuthenticatedUser` - `role`, `authMethods`, `sessionVersion`          |
-| `verifyAccessToken()`                     | Signature, `iss`, pinned `aud`, `exp`, scopes | `AccessTokenClaims` - no role (access tokens don't carry one)          |
-| `verifyPlatformSession()`                 | The above, plus live introspection            | `AuthenticatedUser` with **current** role and session version          |
-| `getUser()` / `hydrateSession()`          | Transport only                                | `ProfileUser` - display claims, deliberately no `role` field to misuse |
-| `decodeIdTokenUnsafe()`, `parseIdToken()` | **Nothing**                                   | `UnverifiedUser` - attacker-controlled by definition                   |
+| Method                                    | Verified?                                      | Gives you                                                              |
+| ----------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------- |
+| `verifyIdToken()`                         | Signature, `iss`, `aud`, `exp`, `nonce`, `evt` | `AuthenticatedUser` - `role`, `authMethods`, `sessionVersion`          |
+| `verifyAccessToken()`                     | Signature, `iss`, pinned `aud`, `exp`, scopes  | `AccessTokenClaims` - no role, plus `tokenUse`                         |
+| `verifyPlatformSession()`                 | The above, plus live introspection             | `AuthenticatedUser` with **current** role and session version          |
+| `verifyMachineToken()`                    | The access token checks, plus `token_use`      | `MachineClient` - a `clientId`, and deliberately no user fields        |
+| `verifyEscalationToken()`                 | Signature, `iss`, `aud`, `exp`, `evt`          | `VerifiedEscalation` - proof one step-up happened                      |
+| `getUser()` / `hydrateSession()`          | Transport only                                 | `ProfileUser` - display claims, deliberately no `role` field to misuse |
+| `decodeIdTokenUnsafe()`, `parseIdToken()` | **Nothing**                                    | `UnverifiedUser` - attacker-controlled by definition                   |
 
 `isTokenNearExpiry()` is a refresh _hint_ read from an unverified payload, not a gate. It
 fails closed: unparseable, or no `exp` claim, means "expired."
@@ -23,6 +25,28 @@ checking its signature. A JWT is just base64 - anyone can construct one with any
 an empty or garbage signature. Reading `role` off an unverified decode is the exact bug
 this SDK's v1 → v2 migration exists to close.
 {% /callout %}
+
+## Two tokens are not what they look like
+
+Three token kinds share an issuer, an audience and an algorithm, and differ only by a claim.
+Each check below exists because without it one would verify cleanly as another.
+
+| Kind             | Marked by                | Refused where                              |
+| ---------------- | ------------------------ | ------------------------------------------ |
+| ID token         | no `evt`, no `token_use` | -                                          |
+| Escalation proof | `evt: "escalation"`      | `verifyIdToken()` refuses any `evt` at all |
+| Machine token    | `token_use: "client"`    | every user path, unless opted into         |
+
+A **machine token**'s `sub` is a `client_id`, not a person, so `verifyAccessToken()` refuses
+one by default and `verifyMachineToken()` returns a type with no `id`, `role` or
+`authMethods` on it to misread. `verifyPlatformSession()`, `resolveSession()` and
+`isSessionCurrent()` refuse outright, with no opt-in - there is no user to resolve a session
+for. See [Machine tokens](/flows/machine-tokens).
+
+An **escalation token** asserts that one step-up happened, not that a user is signed in.
+The check runs both ways: `verifyEscalationToken()` requires `evt: "escalation"`, and
+`verifyIdToken()` refuses any token carrying an `evt`. See
+[Method escalation](/flows/escalation).
 
 ## The type system enforces it, not just the docs
 
@@ -75,8 +99,3 @@ A provider that issues other roles needs that set widened at the source - see
 naming isn't decoration. It's so a call site reads as a decision the moment you type it,
 and so a `grep -r Unsafe` finds every place a token's claims are trusted without
 verification.
-
-## Next
-
-[Session models](/core-concepts/session-models) - per-application sessions versus one
-login shared across subdomains, and which verification path each one takes.

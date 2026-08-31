@@ -39,11 +39,34 @@ export interface FakeIdp {
     setIntrospection(body: unknown, options?: { status?: number; advertise?: boolean }): void;
     /** Form bodies received by the introspection endpoint. */
     introspectionRequests: URLSearchParams[];
+    /** Scripts the escalation endpoints: one create response, then a queue of poll responses. */
+    setEscalation(script: EscalationScript): void;
+    /** Form bodies received by the escalation create endpoint. */
+    escalationRequests: URLSearchParams[];
+    /** Form bodies received by the escalation poll endpoint. */
+    escalationPolls: URLSearchParams[];
+    /** Scripts the device authorization endpoint, or drops it from discovery. */
+    setDeviceCode(body: unknown, options?: { status?: number; advertise?: boolean }): void;
+    /** Form bodies received by the device authorization endpoint. */
+    deviceCodeRequests: URLSearchParams[];
     mintIdToken(claims?: Record<string, unknown>, options?: MintOptions): Promise<string>;
     mintAccessToken(claims?: Record<string, unknown>, options?: MintOptions): Promise<string>;
+    /** Mints a step-up proof token, `evt: "escalation"` by default. */
+    mintEscalationToken(claims?: Record<string, unknown>, options?: MintOptions): Promise<string>;
     /** Replaces the signing key while keeping the same `kid`, as a key rotation would. */
     rotateKey(): Promise<void>;
     close(): Promise<void>;
+}
+
+/**
+ * How the fake provider should answer an escalation.
+ *
+ * `polls` is consumed in order and the last entry repeats, so a test can say "pending,
+ * pending, then done" without counting requests.
+ */
+export interface EscalationScript {
+    create?: { status?: number; body: unknown };
+    polls?: Array<{ status?: number; body: unknown }>;
 }
 
 export interface MintOptions {
@@ -89,6 +112,14 @@ export async function startFakeIdp(): Promise<FakeIdp> {
         introspectionStatus: 200,
         advertiseIntrospection: true,
         introspectionRequests: [] as URLSearchParams[],
+        escalation: {} as EscalationScript,
+        escalationRequests: [] as URLSearchParams[],
+        escalationPolls: [] as URLSearchParams[],
+        pollCursor: 0,
+        deviceCode: null as unknown,
+        deviceCodeStatus: 200,
+        advertiseDeviceGrant: true,
+        deviceCodeRequests: [] as URLSearchParams[],
     };
 
     let issuer = '';
@@ -128,6 +159,19 @@ export async function startFakeIdp(): Promise<FakeIdp> {
             ...claims,
         }, options);
 
+    const mintEscalationToken = (claims: Record<string, unknown> = {}, options: MintOptions = {}) =>
+        sign({
+            sub: 'user-1',
+            evt: 'escalation',
+            satisfied_by: 'passkey',
+            already_satisfied: false,
+            amr: ['mfa', 'fido', 'hw'],
+            acr: 'urn:wilsoon:acr:passkey',
+            auth_time: Math.floor(Date.now() / 1000),
+            aud: options.audience ?? CLIENT_ID,
+            ...claims,
+        }, options);
+
     const server: Server = createServer((req, res) => {
         void (async () => {
             const url = new URL(req.url || '/', issuer || 'http://127.0.0.1');
@@ -145,6 +189,8 @@ export async function startFakeIdp(): Promise<FakeIdp> {
                     end_session_endpoint: `${issuer}/api/logout`,
                     jwks_uri: `${issuer}/api/jwks`,
                     ...(state.advertiseIntrospection ? { introspection_endpoint: `${issuer}/api/introspect` } : {}),
+                    ...(state.advertiseDeviceGrant ? { device_authorization_endpoint: `${issuer}/api/device/code` } : {}),
+                    grant_types_supported: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:device_code'],
                     response_types_supported: ['code'],
                     id_token_signing_alg_values_supported: ['RS256'],
                     code_challenge_methods_supported: ['S256'],
@@ -186,6 +232,68 @@ export async function startFakeIdp(): Promise<FakeIdp> {
                 return json(state.introspectionStatus, state.introspection);
             }
 
+            const readForm = async () => {
+                const chunks: Buffer[] = [];
+                for await (const chunk of req) chunks.push(chunk as Buffer);
+                return new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+            };
+
+            if (url.pathname === '/api/escalate') {
+                state.escalationRequests.push(await readForm());
+                state.pollCursor = 0;
+
+                const scripted = state.escalation.create;
+                if (scripted) return json(scripted.status ?? 200, scripted.body);
+
+                const expiresAt = Math.floor(Date.now() / 1000) + 300;
+                return json(200, {
+                    escalation_id: 'esc-1',
+                    escalation_url: `${issuer}/2fa/escalate?escalation_id=esc-1&signature=abc`,
+                    strategies: ['passkey'],
+                    force: false,
+                    poll_token: 'poll-secret',
+                    expires_in: 300,
+                    expires_at: expiresAt,
+                    interval: 1,
+                });
+            }
+
+            if (url.pathname === '/api/escalate/poll') {
+                state.escalationPolls.push(await readForm());
+
+                const queue = state.escalation.polls ?? [];
+                const scripted = queue[Math.min(state.pollCursor, queue.length - 1)];
+                state.pollCursor += 1;
+
+                if (scripted) return json(scripted.status ?? 200, scripted.body);
+
+                return json(200, {
+                    status: 'completed',
+                    escalation_id: 'esc-1',
+                    already_satisfied: false,
+                    satisfied_by: 'passkey',
+                    amr: ['mfa', 'fido', 'hw'],
+                    acr: 'urn:wilsoon:acr:passkey',
+                    auth_time: Math.floor(Date.now() / 1000),
+                    escalation_token: await mintEscalationToken(),
+                });
+            }
+
+            if (url.pathname === '/api/device/code') {
+                state.deviceCodeRequests.push(await readForm());
+
+                if (state.deviceCode !== null) return json(state.deviceCodeStatus, state.deviceCode);
+
+                return json(200, {
+                    device_code: 'dev-code-1',
+                    user_code: 'BCDF-GHJK',
+                    verification_uri: `${issuer}/device`,
+                    verification_uri_complete: `${issuer}/device?user_code=BCDF-GHJK`,
+                    expires_in: 600,
+                    interval: 1,
+                });
+            }
+
             if (url.pathname === '/api/userinfo') {
                 return json(state.userinfoStatus, state.userinfo);
             }
@@ -211,8 +319,18 @@ export async function startFakeIdp(): Promise<FakeIdp> {
             state.advertiseIntrospection = options.advertise ?? true;
         },
         get introspectionRequests() { return state.introspectionRequests; },
+        setEscalation(script) { state.escalation = script; state.pollCursor = 0; },
+        get escalationRequests() { return state.escalationRequests; },
+        get escalationPolls() { return state.escalationPolls; },
+        setDeviceCode(body, options = {}) {
+            state.deviceCode = body;
+            state.deviceCodeStatus = options.status ?? 200;
+            state.advertiseDeviceGrant = options.advertise ?? true;
+        },
+        get deviceCodeRequests() { return state.deviceCodeRequests; },
         mintIdToken,
         mintAccessToken,
+        mintEscalationToken,
         async rotateKey() { keys = await generateKeyPair('RS256', { extractable: true }); },
         close: () => new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve()))),
     };

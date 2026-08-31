@@ -62,8 +62,7 @@ accepts a cookie-authenticated userinfo request and sends CORS credentials heade
 your origin. A provider that only accepts bearer tokens won't support it - read the
 session server-side instead.
 
-## Next
+## That's it!
 
-That's the whole list - everything else in the SDK, `amr` policies included, is provider
-inspecific by construction. If you hit something not covered here, it's worth a GitHub
+If you hit something not covered here, it's worth a GitHub
 issue: [github.com/Wilsoon7721/node-oidc-kit](https://github.com/Wilsoon7721/node-oidc-kit).

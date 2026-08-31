@@ -1,7 +1,7 @@
 {
   "name": "wilsoonid-sdk",
   "private": true,
-  "packageManager": "pnpm@9.0.0",
+  "packageManager": "pnpm@11.24.0",
   "scripts": {
     "build": "turbo build",
     "dev": "turbo dev",
@@ -14,7 +14,7 @@
     "@types/node": "^25.6.0",
     "@typescript-eslint/eslint-plugin": "^7",
     "@typescript-eslint/parser": "^7",
-    "@wilsoon/docs": "^1.1.0",
+    "@wilsoon/docs": "^1.4.0",
     "eslint": "^8.0.0",
     "eslint-plugin-deprecation": "^3.0.0",
     "eslint-plugin-jsdoc": "^46.10.1",
