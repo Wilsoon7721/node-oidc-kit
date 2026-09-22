@@ -13,9 +13,6 @@ export interface AuthMiddlewareOptions extends AuthConfig {
   /**
    * Verify the ID token's signature, issuer, audience and expiry before letting the
    * request through (default true).
-   *
-   * With this off the middleware only checks that a cookie exists, which any client can
-   * fabricate - treat that as convenience routing, not access control.
    */
   verify?: boolean;
   /** Restrict access to these roles. Requires verification. */
@@ -32,7 +29,25 @@ export interface AuthMiddlewareOptions extends AuthConfig {
   cookieName?: string;
   /** Lifetime of the refreshed cookie, in seconds (default 1 year). */
   cookieMaxAgeSeconds?: number;
+  /**
+   * How long before the access token expires a refresh is attempted, in seconds
+   * (default 300).
+   *
+   * Refreshing early is what lets the refresh happen on a navigation, where it is one
+   * request, rather than on whichever fetch happens to be first past the post.
+   */
+  refreshThresholdSeconds?: number;
+  /**
+   * Which requests may refresh (default `"navigation"`).
+   */
+  refreshOn?: "navigation" | "request";
 }
+
+/**
+ * How close to expiry a token has to be for any request, navigation or not, to refresh it.
+ * Past this there is nothing left to ride on, so waiting for a navigation would just fail.
+ */
+const REFRESH_FLOOR_SECONDS = 30;
 
 /** Reads the request's cookies through the library's storage interface. */
 class RequestCookieStorage implements AuthStorage {
@@ -59,13 +74,13 @@ class RequestCookieStorage implements AuthStorage {
  * Builds a Next.js middleware that gates routes on a verified session, refreshing tokens
  * that are about to expire.
  *
- * Per request, in order: read the session cookie; refresh if the access token is near
- * expiry (writing the rotated tokens back onto the response); then verify, and check the
- * `roles`/`amr` policy if one was given. Any failure redirects to `loginPath` and expires
- * the cookie, so a request never proceeds on a session that could not be verified.
+ * Per request, in order: read the session cookie, refresh if the access token is near expiry (writing the rotated tokens back onto the response)
+ * then verify, and check the `roles`/`amr` policy if one was given. A session that cannot be verified redirects to `loginPath` and expires the cookie, so a request never proceeds on one.
  *
- * Scope it with a `config.matcher` as usual - it runs on every matched request, and
- * verification is not free even with the JWKS cached.
+ * Refreshes are attempted `refreshThresholdSeconds` before expiry and, by default, only on navigations - one per page load rather than one per parallel fetch, all of them presenting the same single-use refresh token.
+ * A refresh that fails while the access token is still valid is ignored.
+ *
+ * Scope it with a `config.matcher` as usual - it runs on every matched request, and verification is not free even with the JWKS cached.
  *
  * ```ts
  * export default createAuthMiddleware({ ...authConfig, roles: ['admin'] });
@@ -77,6 +92,8 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions) {
   const unauthorizedPath = options.unauthorizedPath ?? loginPath;
   const cookieName = options.cookieName ?? STORAGE_KEYS.tokens;
   const shouldVerify = options.verify !== false;
+  const refreshThreshold = options.refreshThresholdSeconds ?? 300;
+  const refreshOn = options.refreshOn ?? "navigation";
 
   // Cached per configuration: the JWKS is then fetched once per runtime instance, not once
   // per request.
@@ -119,24 +136,37 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions) {
     let response: NextResponse | null = null;
     let current: TokenResponse = tokens;
 
-    if (sharedClient.isTokenNearExpiry(tokens.access_token)) {
-      if (!tokens.refresh_token) return signOut(loginPath);
+    const spent = sharedClient.isTokenNearExpiry(tokens.access_token, Math.min(refreshThreshold, REFRESH_FLOOR_SECONDS));
+    const nearExpiry = spent || sharedClient.isTokenNearExpiry(tokens.access_token, refreshThreshold);
+    const isNavigation = request.headers.get("sec-fetch-mode") === "navigate" || (request.headers.get("accept") ?? "").includes("text/html");
 
-      try {
-        current = await sharedClient.refreshAccessToken(tokens.refresh_token, { persist: false });
-      } catch {
-        return signOut(loginPath);
+    if (nearExpiry && (spent || refreshOn === "request" || isNavigation)) {
+      if (!tokens.refresh_token) {
+        // Nothing to renew with. Sitting on a still-valid token is fine, a spent one is not.
+        if (spent) return signOut(loginPath);
+      } else {
+        let rotated: TokenResponse | null = null;
+
+        try {
+          rotated = await sharedClient.refreshAccessToken(tokens.refresh_token, { persist: false });
+        } catch {
+          if (spent) return signOut(loginPath);
+        }
+
+        if (rotated) {
+          current = rotated;
+
+          response = NextResponse.next();
+          response.cookies.set(cookieName, JSON.stringify(current), {
+            path: "/",
+            maxAge: options.cookieMaxAgeSeconds ?? 31536000,
+            sameSite: "lax",
+            secure: true,
+            httpOnly: true,
+            domain: options.cookieDomain,
+          });
+        }
       }
-
-      response = NextResponse.next();
-      response.cookies.set(cookieName, JSON.stringify(current), {
-        path: "/",
-        maxAge: options.cookieMaxAgeSeconds ?? 31536000,
-        sameSite: "lax",
-        secure: true,
-        httpOnly: true,
-        domain: options.cookieDomain,
-      });
     }
 
     if (shouldVerify) {
@@ -144,8 +174,7 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions) {
 
       try {
         if (needsClaims) {
-          // Resolves through the ID token when it is ours, or the shared platform
-          // access token plus introspection when it belongs to a sibling service.
+          // Resolves through the ID token when it is ours, or the shared platform access token + introspection when it belongs to a sibling service.
           const { user, error } = await resolveSessionUser(sharedClient, current);
           if (!user) throw error ?? new Error("no session");
 
@@ -158,8 +187,7 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions) {
         } else if (current.id_token && isAddressedTo(current.id_token, options.clientId)) {
           await sharedClient.verifyIdToken(current.id_token);
         } else if (options.apiAudience) {
-          // No policy to enforce, so "is this a real session?" is enough - and that
-          // needs no introspection round trip.
+          // No policy to enforce, so just verify
           await sharedClient.verifyAccessToken(current.access_token);
         } else {
           throw new Error("cannot verify a sibling service session without `apiAudience`");

@@ -4,6 +4,30 @@ The three original packages (`@wilsoon/auth-core`, `@wilsoon/auth-react`,
 `@wilsoon/auth-next`) are versioned together. `@wilsoon/auth-machine` has no dependency on
 them and is versioned independently, starting at 0.x.
 
+## 2.3.0
+
+One fix, in the Next.js middleware: it was ending the sessions it was meant to be keeping.
+
+### Fixed - `@wilsoon/auth-next`
+
+- **`createAuthMiddleware()` no longer refreshes from every request in parallel.** A refresh
+  token is single-use under rotation, so a page load putting ten requests through the
+  middleware with one cookie sent ten refreshes, nine of them presenting a token that had just
+  been rotated away. A provider that reads that as reuse revokes the whole family, which turned
+  a fortnight-long session into a daily re-login. Refreshes now begin
+  `refreshThresholdSeconds` before expiry (default 300) and only on navigations - one per page
+  load. A token with nothing left still refreshes from any request, so an app that only sends
+  fetches keeps renewing.
+- **A failed refresh no longer ends a live session.** An unreachable provider, or a sibling
+  request that rotated the same token a moment earlier, signed the user out. While the access
+  token is still valid the request carries on and a later one retries; a spent token still signs
+  out.
+
+### Added - `@wilsoon/auth-next`
+
+- `refreshThresholdSeconds` and `refreshOn` (`"navigation"` by default, or `"request"`) on
+  `AuthMiddlewareOptions`.
+
 ## 2.2.0
 
 Three flows past authorization-code-plus-PKCE, a new package for the last of them, and

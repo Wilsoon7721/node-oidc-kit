@@ -28,8 +28,11 @@ const locationOf = (response: Response) => {
     return location ? new URL(location) : null;
 };
 
+let rotatedId: string;
+
 beforeAll(async () => {
     idp = await startFakeIdp();
+    rotatedId = await idp.mintIdToken();
 });
 
 afterAll(async () => {
@@ -100,6 +103,97 @@ describe('createAuthMiddleware', () => {
         expect(written.refresh_token).toBe('rt-2');
         expect(written.access_token).toBe(rotatedAccess);
         expect(idp.tokenRequests.at(-1)?.get('grant_type')).toBe('refresh_token');
+    });
+
+    it('leaves a refresh to the navigation rather than the fetches beside it', async () => {
+        /*
+          Rotation is single-use. Ten parallel requests carrying one cookie used to send ten
+          refreshes, nine of which looked like token theft to the provider - which revoked the
+          family and ended the session. Only the navigation refreshes now.
+        */
+        const tokens = {
+            access_token: await idp.mintAccessToken({}, { expiresInSeconds: 120 }),
+            id_token: await idp.mintIdToken(),
+            refresh_token: 'rt-1',
+        };
+        const before = idp.tokenRequests.length;
+
+        const fetched = await middlewareFor()(requestWith(tokens));
+
+        expect(fetched.headers.get('location')).toBeNull();
+        expect(idp.tokenRequests.length).toBe(before);
+        expect(fetched.cookies.get(STORAGE_KEYS.tokens)).toBeUndefined();
+
+        const rotatedAccess = await idp.mintAccessToken();
+        idp.setTokenHandler(() => ({
+            body: { access_token: rotatedAccess, id_token: rotatedId, refresh_token: 'rt-2', token_type: 'Bearer', expires_in: 3600 },
+        }));
+
+        const navigation = requestWith(tokens);
+        navigation.headers.set('sec-fetch-mode', 'navigate');
+        const navigated = await middlewareFor()(navigation);
+
+        expect(idp.tokenRequests.length).toBe(before + 1);
+        expect(JSON.parse(navigated.cookies.get(STORAGE_KEYS.tokens)!.value).refresh_token).toBe('rt-2');
+    });
+
+    it('refreshes on any request once the token is spent', async () => {
+        // Otherwise an app that only ever sends fetches would never renew anything.
+        const rotatedAccess = await idp.mintAccessToken();
+        idp.setTokenHandler(() => ({
+            body: { access_token: rotatedAccess, id_token: rotatedId, refresh_token: 'rt-2', token_type: 'Bearer', expires_in: 3600 },
+        }));
+
+        const response = await middlewareFor()(requestWith({
+            access_token: await idp.mintAccessToken({}, { expiresInSeconds: 5 }),
+            id_token: await idp.mintIdToken(),
+            refresh_token: 'rt-1',
+        }));
+
+        expect(response.headers.get('location')).toBeNull();
+        expect(JSON.parse(response.cookies.get(STORAGE_KEYS.tokens)!.value).refresh_token).toBe('rt-2');
+    });
+
+    it('refreshes on every request when asked to', async () => {
+        const rotatedAccess = await idp.mintAccessToken();
+        idp.setTokenHandler(() => ({
+            body: { access_token: rotatedAccess, id_token: rotatedId, refresh_token: 'rt-2', token_type: 'Bearer', expires_in: 3600 },
+        }));
+
+        const response = await middlewareFor({ refreshOn: 'request' })(requestWith({
+            access_token: await idp.mintAccessToken({}, { expiresInSeconds: 120 }),
+            id_token: await idp.mintIdToken(),
+            refresh_token: 'rt-1',
+        }));
+
+        expect(JSON.parse(response.cookies.get(STORAGE_KEYS.tokens)!.value).refresh_token).toBe('rt-2');
+    });
+
+    it('keeps a session whose early refresh failed but whose token is still good', async () => {
+        // A provider hiccup, or a sibling request that rotated this token a moment ago, is not
+        // a reason to sign anybody out while the access token still has minutes left.
+        idp.setTokenHandler(() => ({ status: 400, body: { error: 'invalid_grant' } }));
+
+        const navigation = requestWith({
+            access_token: await idp.mintAccessToken({}, { expiresInSeconds: 120 }),
+            id_token: await idp.mintIdToken(),
+            refresh_token: 'rt-1',
+        });
+        navigation.headers.set('sec-fetch-mode', 'navigate');
+
+        const response = await middlewareFor()(navigation);
+
+        expect(response.headers.get('location')).toBeNull();
+        expect(response.cookies.get(STORAGE_KEYS.tokens)).toBeUndefined();
+    });
+
+    it('keeps a session with no refresh token until the access token is spent', async () => {
+        const response = await middlewareFor()(requestWith({
+            access_token: await idp.mintAccessToken({}, { expiresInSeconds: 120 }),
+            id_token: await idp.mintIdToken(),
+        }));
+
+        expect(response.headers.get('location')).toBeNull();
     });
 
     it('signs out when the access token is expiring and there is no refresh token', async () => {
