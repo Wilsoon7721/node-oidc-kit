@@ -313,6 +313,10 @@ sessions, `session_version` revocation and permission registration, all built on
 hooks. See [Pointing it at your own provider](https://docs.wilsoon.dev/node-oidc-kit/core-concepts/your-own-provider)
 to write your own with `defineProfile()`.
 
+Profiles for other providers live in
+[wilsoon-auth-providers](https://github.com/Wilsoon7721/wilsoon-auth-providers), one package
+per provider. Look there before writing your own, and send new ones there rather than here.
+
 ## Contributing
 
 Contributions are welcome, including forks that take this somewhere I wouldn't. This uses an [MIT license](LICENSE), you don't need permission.
@@ -371,7 +375,7 @@ These are what the existing code follows; matching them makes review quick.
 
 - Make `ALLOWED_ALGORITHMS` configurable, still as an allowlist.
 - Storage adapters for SvelteKit, Remix, Hono, Express - ideally as their own packages, with a link from here.
-- Provider profiles for other providers (Auth0, Keycloak, Entra ID), as their own packages.
+- Provider profiles for other providers (Auth0, Keycloak, Entra ID), in [wilsoon-auth-providers](https://github.com/Wilsoon7721/wilsoon-auth-providers).
 
 Open an issue before a large change so we can discuss a little first. For a suspected security vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening a public issue - it explains what's in scope and how to reach me privately.
 
