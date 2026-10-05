@@ -15,21 +15,27 @@ const fingerprint = (value: string): string => {
     return (hash >>> 0).toString(36);
 };
 
+/** Functions and profiles cannot be serialised, so each distinct object gets a stable id instead. */
+const identities = new WeakMap<object, number>();
+let nextIdentity = 1;
+const identityOf = (value: unknown): string | number => {
+    if ((typeof value !== 'object' && typeof value !== 'function') || value === null) return typeof value === 'string' ? value : '';
+    let id = identities.get(value);
+    if (id === undefined) {
+        id = nextIdentity++;
+        identities.set(value, id);
+    }
+    return `#${id}`;
+};
+
 /**
  * Returns a client for this configuration, reused across requests.
  *
- * Verification fetches the provider's JWKS and caches the keys *inside* the client, so a fresh
- * client per request would refetch the key set on every render. Platform-session results are
- * cached in there too.
- *
- * The key covers every field that changes behaviour, **including a fingerprint of the client
- * secret**: keying on a subset means two configurations that differ only in an uncovered field
- * silently share a client, and the second caller gets one configured for someone else.
- * `resolveSessionVersion` is excluded because a function cannot be fingerprinted; it affects
- * only `isSessionCurrent`, never verification.
+ * Verification fetches the provider's JWKS and caches the keys *inside* the client, so a fresh client per request would refetch the key set on every render.
+ * The key covers every field that changes behaviour, including a fingerprint of the client secret and the identity of the profile and claim selectors; `resolveSessionVersion` is excluded because it never affects verification.
  *
  * @param config The application's authentication configuration.
- * @returns A client for that exact configuration.
+ * @returns A client for that exact configuration, with the profile's extensions attached.
  */
 export function getCachedClient(config: AuthConfig): AuthClient {
     const key = fingerprint(JSON.stringify([
@@ -43,6 +49,11 @@ export function getCachedClient(config: AuthConfig): AuthClient {
         config.clockToleranceSeconds ?? '',
         config.platformSessionCacheSeconds ?? '',
         config.jwks ?? '',
+        config.storagePrefix ?? '',
+        identityOf(config.profile),
+        identityOf(config.rolesClaim),
+        identityOf(config.permissionsClaim),
+        identityOf(config.detectMachineToken),
     ]));
 
     const existing = clients.get(key);

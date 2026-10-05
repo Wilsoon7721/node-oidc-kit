@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { AuthClient, AuthConfig, AuthStorage, satisfiesAmr, STORAGE_KEYS, TokenResponse, UserRole } from "@wilsoon/auth-core";
+import { AuthClient, AuthConfig, AuthError, AuthStorage, hasPermission, hasRole, LiveAccess, satisfiesAmr, TokenResponse } from "@wilsoon/auth-core";
 import { getCachedClient } from "./client-cache";
 import { isAddressedTo, resolveSessionUser } from "./resolve";
 
@@ -15,12 +15,24 @@ export interface AuthMiddlewareOptions extends AuthConfig {
    * request through (default true).
    */
   verify?: boolean;
-  /** Restrict access to these roles. Requires verification. */
-  roles?: UserRole[];
+  /** Let through only users holding **any** of these roles. Requires verification. */
+  roles?: string[];
+  /** Let through only users holding **every** one of these permissions, e.g. `["games_portal.access"]`. Requires verification. */
+  permissions?: string[];
+  /**
+   * `"live"` asks the provider on every request whether the session still stands, signing the user out when it does not and guarding `permissions` on what the user holds now (default `"token"`).
+   * Without it, a revoked permission lands at the next refresh. Needs a `clientSecret`, since it uses introspection.
+   */
+  enforce?: "token" | "live";
+  /**
+   * Domain of the session cookie. A leading-dot domain (`.example.com`) shares the session across subdomains.
+   * It must match the domain the cookie was set with, or signing out silently fails and the user loops.
+   */
+  cookieDomain?: string;
   /** Require these authentication methods (`amr`). Requires verification. */
   amr?: string[];
   /**
-   * Name of the cookie holding the token response (default `STORAGE_KEYS.tokens`).
+   * Name of the cookie holding the token response (default: the client's `storageKeys.tokens`, `oidc_tokens` unless a prefix or profile says otherwise).
    *
    * Set this when the provider writes the session cookie under a name of its own. Only
    * the token blob is remapped; the transient `state`/`nonce`/verifier cookies keep their
@@ -53,12 +65,13 @@ const REFRESH_FLOOR_SECONDS = 30;
 class RequestCookieStorage implements AuthStorage {
   constructor(
     private request: NextRequest,
+    private tokenKey: string,
     private tokenCookieName: string,
   ) {}
 
   getItem(key: string): string | null {
     // The token blob may live under a custom cookie name; the transient keys do not.
-    const name = key === STORAGE_KEYS.tokens ? this.tokenCookieName : key;
+    const name = key === this.tokenKey ? this.tokenCookieName : key;
     return this.request.cookies.get(name)?.value ?? null;
   }
 
@@ -75,7 +88,7 @@ class RequestCookieStorage implements AuthStorage {
  * that are about to expire.
  *
  * Per request, in order: read the session cookie, refresh if the access token is near expiry (writing the rotated tokens back onto the response)
- * then verify, and check the `roles`/`amr` policy if one was given. A session that cannot be verified redirects to `loginPath` and expires the cookie, so a request never proceeds on one.
+ * then verify, with `enforce: "live"` ask the provider whether the session still stands, and check the `roles`/`permissions`/`amr` policy if one was given. A session that cannot be verified redirects to `loginPath` and expires the cookie, so a request never proceeds on one.
  *
  * Refreshes are attempted `refreshThresholdSeconds` before expiry and, by default, only on navigations - one per page load rather than one per parallel fetch, all of them presenting the same single-use refresh token.
  * A refresh that fails while the access token is still valid is ignored.
@@ -83,21 +96,26 @@ class RequestCookieStorage implements AuthStorage {
  * Scope it with a `config.matcher` as usual - it runs on every matched request, and verification is not free even with the JWKS cached.
  *
  * ```ts
- * export default createAuthMiddleware({ ...authConfig, roles: ['admin'] });
+ * export default createAuthMiddleware({ ...authConfig, permissions: ['games_portal.admin'], enforce: 'live' });
  * export const config = { matcher: ['/admin/:path*'] };
  * ```
  */
 export function createAuthMiddleware(options: AuthMiddlewareOptions) {
   const loginPath = options.loginPath ?? "/auth";
   const unauthorizedPath = options.unauthorizedPath ?? loginPath;
-  const cookieName = options.cookieName ?? STORAGE_KEYS.tokens;
   const shouldVerify = options.verify !== false;
   const refreshThreshold = options.refreshThresholdSeconds ?? 300;
   const refreshOn = options.refreshOn ?? "navigation";
+  const live = options.enforce === "live";
+
+  if (live && !shouldVerify) throw new AuthError('`enforce: "live"` needs verification; it cannot be combined with `verify: false`.', "INVALID_CONFIG");
+  if (live && !options.clientSecret) throw new AuthError('`enforce: "live"` asks the provider through introspection, which needs a `clientSecret`.', "INVALID_CONFIG");
 
   // Cached per configuration: the JWKS is then fetched once per runtime instance, not once
   // per request.
   const sharedClient = getCachedClient(options);
+  const tokenKey = sharedClient.storageKeys.tokens;
+  const cookieName = options.cookieName ?? tokenKey;
 
   return async (request: NextRequest) => {
     const redirectTo = (pathname: string) => {
@@ -106,6 +124,20 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions) {
       url.search = "";
       url.searchParams.set("callbackUrl", request.nextUrl.pathname);
       return url;
+    };
+
+    // The provider could not be asked. Failing closed without clearing the cookie keeps an outage from signing everyone out.
+    const unavailable = () => new NextResponse("Could not confirm access with the identity provider.", { status: 503, headers: { "Retry-After": "5" } });
+
+    /** `enforce: "live"`: the provider's answer, or a response to return when there is none to go on. */
+    const askLive = async (): Promise<LiveAccess | NextResponse> => {
+      let access: LiveAccess;
+      try {
+        access = await sharedClient.liveAccess(current.access_token);
+      } catch {
+        return unavailable();
+      }
+      return access.active ? access : signOut(loginPath);
     };
 
     const signOut = (pathname: string) => {
@@ -126,7 +158,7 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions) {
 
     // Parsing goes through the library, which tolerates the URI-encoded form the identity
     // provider writes and returns null instead of throwing on a malformed cookie.
-    const reader = new AuthClient(options, new RequestCookieStorage(request, cookieName));
+    const reader = new AuthClient(options, new RequestCookieStorage(request, tokenKey, cookieName));
     const tokens = reader.getStoredTokens();
 
     if (!tokens) {
@@ -170,15 +202,26 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions) {
     }
 
     if (shouldVerify) {
-      const needsClaims = !!(options.roles || options.amr);
+      const needsClaims = !!(options.roles || options.permissions || options.amr);
+      let access: LiveAccess | null = null;
 
       try {
         if (needsClaims) {
-          // Resolves through the ID token when it is ours, or the shared platform access token + introspection when it belongs to a sibling service.
+          // Resolves through the ID token when it is ours, or through the profile when the session belongs to a sibling service.
           const { user, error } = await resolveSessionUser(sharedClient, current);
           if (!user) throw error ?? new Error("no session");
 
-          if (options.roles && !options.roles.includes(user.role)) {
+          if (live) {
+            const answer = await askLive();
+            if (answer instanceof NextResponse) return answer;
+            access = answer;
+          }
+
+          if (options.roles && !hasRole(user, options.roles)) {
+            return NextResponse.redirect(redirectTo(unauthorizedPath));
+          }
+          // The live answer replaces the token's snapshot when the provider gave one.
+          if (options.permissions && !hasPermission({ permissions: access?.permissions ?? user.permissions }, options.permissions)) {
             return NextResponse.redirect(redirectTo(unauthorizedPath));
           }
           if (options.amr && !satisfiesAmr(user, options.amr)) {
@@ -194,6 +237,11 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions) {
         }
       } catch {
         return signOut(loginPath);
+      }
+
+      if (live && !needsClaims) {
+        const answer = await askLive();
+        if (answer instanceof NextResponse) return answer;
       }
     }
 
