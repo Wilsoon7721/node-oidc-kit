@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { STORAGE_KEYS, type AuthConfig } from '@wilsoon/auth-core';
+import { DEFAULT_STORAGE_KEYS as STORAGE_KEYS, type AuthConfig } from '@wilsoon/auth-core';
+import { sharedSessions } from './shared-profile';
 import { createAuthMiddleware, type AuthMiddlewareOptions } from '../src/middleware';
 import { API_AUDIENCE, CLIENT_ID, startFakeIdp, unsignedToken, type FakeIdp } from '../../auth-core/test/fake-idp';
 
@@ -10,6 +11,7 @@ const config = (): AuthConfig => ({
     clientId: CLIENT_ID,
     issuer: idp.issuer,
     redirectUri: 'http://localhost:3000/callback',
+    rolesClaim: 'role',
 });
 
 const middlewareFor = (overrides: Partial<AuthMiddlewareOptions> = {}) =>
@@ -284,6 +286,7 @@ describe('createAuthMiddleware', () => {
             clientId: 'dash-service',
             apiAudience: API_AUDIENCE,
             clientSecret: 'shh',
+            profile: sharedSessions,
             roles: ['admin'],
             unauthorizedPath: '/unauthorized',
         });
@@ -312,6 +315,68 @@ describe('createAuthMiddleware', () => {
         }));
 
         expect(locationOf(response)?.pathname).toBe('/auth');
+    });
+
+    it('enforces a permission policy from the session access token', async () => {
+        const middleware = middlewareFor({ apiAudience: API_AUDIENCE, permissionsClaim: 'permissions', permissions: ['games_portal.access'], unauthorizedPath: '/unauthorized' });
+
+        const allowed = await middleware(requestWith({ access_token: await idp.mintAccessToken({ permissions: ['games_portal.access'] }), id_token: await idp.mintIdToken() }));
+        expect(allowed.headers.get('location')).toBeNull();
+
+        const denied = await middleware(requestWith({ access_token: await idp.mintAccessToken({ permissions: [] }), id_token: await idp.mintIdToken() }));
+        expect(locationOf(denied)?.pathname).toBe('/unauthorized');
+    });
+
+    describe('enforce: "live"', () => {
+        const live = (overrides: Partial<AuthMiddlewareOptions> = {}) => middlewareFor({ apiAudience: API_AUDIENCE, clientSecret: 'shh', permissionsClaim: 'permissions', enforce: 'live', unauthorizedPath: '/unauthorized', ...overrides });
+        const session = async (permissions: string[] = ['games_portal.access']) => requestWith({ access_token: await idp.mintAccessToken({ permissions }), id_token: await idp.mintIdToken() });
+
+        afterEach(() => idp.setIntrospection({ active: true, sub: 'user-1', role: 'admin', session_version: 3 }));
+
+        it('lets a session through while the provider still honours it', async () => {
+            idp.setIntrospection({ active: true, sub: 'user-1', permissions: ['games_portal.access'] });
+            const before = idp.introspectionRequests.length;
+
+            const response = await live()(await session());
+
+            expect(response.headers.get('location')).toBeNull();
+            expect(idp.introspectionRequests.length - before).toBe(1);
+        });
+
+        it('signs the user out at once when the provider says the session is gone', async () => {
+            idp.setIntrospection({ active: false });
+
+            const response = await live({ permissions: ['games_portal.access'] })(await session());
+
+            expect(locationOf(response)?.pathname).toBe('/auth');
+            expect(response.cookies.get(STORAGE_KEYS.tokens)?.value).toBe('');
+        });
+
+        it('guards on the live permissions, not the token snapshot', async () => {
+            // The token still says `admin`; the provider says it was taken away a moment ago.
+            idp.setIntrospection({ active: true, sub: 'user-1', permissions: ['games_portal.access'] });
+            const revoked = await live({ permissions: ['games_portal.admin'] })(await session(['games_portal.access', 'games_portal.admin']));
+            expect(locationOf(revoked)?.pathname).toBe('/unauthorized');
+
+            // And the reverse: granted since the token was issued.
+            idp.setIntrospection({ active: true, sub: 'user-1', permissions: ['games_portal.access', 'games_portal.admin'] });
+            const granted = await live({ permissions: ['games_portal.admin'] })(await session(['games_portal.access']));
+            expect(granted.headers.get('location')).toBeNull();
+        });
+
+        it('answers 503 without clearing the cookie when the provider cannot be asked', async () => {
+            idp.setIntrospection({ error: 'server_error' }, { status: 500 });
+
+            const response = await live({ permissions: ['games_portal.access'] })(await session());
+
+            expect(response.status).toBe(503);
+            expect(response.cookies.get(STORAGE_KEYS.tokens)).toBeUndefined();
+        });
+
+        it('refuses a configuration that cannot work', () => {
+            expect(() => middlewareFor({ enforce: 'live' })).toThrow(/clientSecret/);
+            expect(() => middlewareFor({ enforce: 'live', clientSecret: 'shh', verify: false })).toThrow(/verify: false/);
+        });
     });
 
     it('with verify:false, routes on cookie presence only', async () => {

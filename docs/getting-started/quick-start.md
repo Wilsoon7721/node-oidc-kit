@@ -15,6 +15,7 @@ export const authConfig = {
   issuer: "https://id.example.com",
   redirectUri: "https://app.example.com/api/callback",
   scope: ["openid", "profile", "email", "offline_access"],
+  rolesClaim: "roles", // where your provider puts roles; see Authorization
 };
 
 // One client per request, holding this request's cookies.
@@ -41,19 +42,19 @@ client.saveTokens(tokens);
 
 ```ts
 // On any later request
-const user = await client.resolveSession(client.getStoredTokens());
-if (user.role !== "admin") return forbidden();
+const user = await client.resolveSession(client.getStoredTokens() ?? {});
+if (!hasRole(user, "admin")) return forbidden(); // hasRole from @wilsoon/auth-core
 ```
 
 {% callout type="warning" title="Only three methods are safe to authorize on" %}
-`verifyIdToken()`, `verifyAccessToken()` and `verifyPlatformSession()` - everything else, including `handleCallback()`'s `user` and any method whose name ends in `Unsafe`, either wraps one of those three or returns something you may render but must never gate access with. See [Security model](/core-concepts/security-model).
+`verifyIdToken()`, `verifyAccessToken()` and `verifyMachineToken()`, plus whatever verifiers a provider profile adds - everything else, including `handleCallback()`'s `user` and any method whose name ends in `Unsafe`, either wraps one of those three or returns something you may render but must never gate access with. See [Security model](/core-concepts/security-model).
 {% /callout %}
 
 ## Using a framework package
 
 `@wilsoon/auth-react` wraps this in `<AuthProvider>` / `useAuth()` for browser session state, and `@wilsoon/auth-next` wraps it in `getSession()` / `requireSession()` / `createAuthMiddleware()` for the Next.js App Router. Both call the same `AuthClient` underneath - nothing above changes, only who calls it.
 
-For per-framework, copy-pasteable recipes (Next.js, a React SPA, Astro on Cloudflare Workers, a plain resource server), see the [integration guide](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/INTEGRATION.md) on GitHub.
+For per-framework, copy-pasteable recipes (Next.js, a React SPA, Astro on Cloudflare Workers, a plain resource server), see [Recipes](/recipes/nextjs).
 
 ## Next
 

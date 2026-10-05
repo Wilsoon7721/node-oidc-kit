@@ -30,14 +30,14 @@ This grew out of running my own OIDC provider for several first-party apps. The 
 | `@wilsoon/auth-next`    | `getSession()`, `requireSession()`, `createAuthMiddleware()`, `ServerCookieStorage`.                               | core, react, Next ≥14 |
 | `@wilsoon/auth-machine` | `client_credentials` tokens for server-to-server calls, with caching and single-flight. **0.x**, standalone.       | nothing               |
 
-The first three are versioned together on a shared 2.x line. `auth-machine` has no dependency on the others and is versioned independently - see [Machine tokens](/flows/machine-tokens).
+The first three are versioned together on a shared 3.x line. `auth-machine` has no dependency on the others and is versioned independently - see [Machine tokens](/flows/machine-tokens).
 
 Using anything else - Astro, SvelteKit, Hono, Express? Use `@wilsoon/auth-core` directly and write one storage adapter. See [Storage](/core-concepts/storage) - that's the entire
 integration.
 
 ## One rule, everywhere
 
-Only five methods produce a value you may authorize on: `verifyIdToken()`, `verifyAccessToken()`, `verifyPlatformSession()`, `verifyMachineToken()` and `verifyEscalationToken()`. Every method whose name ends in `Unsafe`, plus the userinfo-backed `getUser()` / `hydrateSession()`, returns something you can render but never gate access with. [Security model](/core-concepts/security-model) covers why, and how the type system enforces it.
+Only three core methods produce a value you may authorize on: `verifyIdToken()`, `verifyAccessToken()` and `verifyMachineToken()`, plus `handleCallback()` and `resolveSession()`, which wrap them. A provider profile can add its own, such as WilsoonID's `verifyPlatformSession()` and `verifyEscalationToken()`. Every method whose name ends in `Unsafe`, plus the userinfo-backed `getUser()`, returns something you can render but never gate access with. [Security model](/core-concepts/security-model) covers why, and how the type system enforces it.
 
 {% aside title="Not a provider" %}
 This is the _client_ half of OIDC. It doesn't run an authorization server, issue tokens, or store users - it talks to one you (or someone else) already runs.
@@ -48,3 +48,4 @@ This is the _client_ half of OIDC. It doesn't run an authorization server, issue
 - [Installation](/getting-started/installation) - requirements and package choice
 - [Quick start](/getting-started/quick-start) - a working login flow in a few lines
 - [Flows](/flows/step-up) - step-up, the device grant, and machine-to-machine tokens
+- [Recipes](/recipes/nextjs) - end-to-end wiring for Next.js, React, other frameworks and APIs

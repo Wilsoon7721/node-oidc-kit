@@ -1,3 +1,6 @@
+import type { ClaimSelector } from "./claims";
+import type { ProviderProfile } from "./profile";
+
 /**
  * Everything the library needs to talk to one identity provider as one registered client.
  *
@@ -35,16 +38,14 @@ export interface AuthConfig {
    * Cookie domain, for adapters and middleware that write cookies. A leading-dot domain
    * (`.example.com`) shares the session across subdomains.
    *
-   * It must match whatever domain the cookie was set with, or clearing it silently fails
-   * and the user is stuck in a redirect loop.
+   * @deprecated Since 3.0.0 - core writes no cookies. Set `cookieDomain` on the `@wilsoon/auth-next` middleware options or `ServerCookieStorage` instead.
    */
   cookieDomain?: string;
   /**
    * The client secret, for confidential clients. Server-side only - never ship this to a
    * browser.
    *
-   * Required for {@link AuthClient.introspectToken} and therefore for
-   * {@link AuthClient.verifyPlatformSession}.
+   * Required for {@link AuthClient.introspectToken}, and for anything a profile builds on it.
    */
   clientSecret?: string;
   /**
@@ -68,13 +69,9 @@ export interface AuthConfig {
   /** Leeway, in seconds, applied to `exp`/`nbf` checks during verification (default 60). */
   clockToleranceSeconds?: number;
   /**
-   * How long a resolved platform session may be reused before it is re-checked with the
-   * provider, in seconds (default 0 - every call re-checks).
+   * How long a resolved platform session may be reused before it is re-checked with the provider, in seconds (default 0).
    *
-   * {@link AuthClient.verifyPlatformSession} makes one introspection request per call, which
-   * on a shared-cookie platform means one per request. A small window (5–15s) removes that
-   * cost from hot paths; the trade-off is that a revocation takes up to that long to be
-   * noticed. Never longer than the token's own expiry.
+   * @deprecated Since 3.0.0 - pass `platformSessionCacheSeconds` to the WilsoonID profile, which still reads this as a fallback.
    */
   platformSessionCacheSeconds?: number;
   /** Tuning for the cached remote JSON Web Key Set. */
@@ -82,32 +79,39 @@ export interface AuthConfig {
   /**
    * Decides whether verified access token claims describe a machine (`client_credentials`) caller rather than a user.
    *
-   * Overrides the built-in check, which recognises `token_use: "client"` and an RFC 9068 `sub` equal to `client_id`.
+   * Overrides the profile's `isMachineToken` and the built-in check, which recognises an RFC 9068 `sub` equal to `client_id`.
    * Set this for a provider that marks machine tokens some other way - returning `false` for a token that really is one lets a `client_id` reach code written for users.
    */
   detectMachineToken?: (claims: Readonly<Record<string, unknown>>) => boolean;
   /**
    * Base URL of the provider's method-escalation API (default `<issuer>/api/escalate`).
    *
-   * Escalation is not part of OIDC discovery, so unlike every other endpoint this one
-   * cannot be looked up and has to be assumed. The default matches the reference
-   * provider; set this if yours mounts it elsewhere. The poll endpoint is always
-   * `<escalationEndpoint>/poll`.
+   * @deprecated Since 3.0.0 - pass `escalationEndpoint` to the WilsoonID profile, which still reads this as a fallback.
    */
   escalationEndpoint?: string;
   /**
-   * Resolves the user's current `session_version` from your backend, enabling
-   * {@link AuthClient.isSessionCurrent}.
+   * Resolves the user's current `session_version` from your backend.
    *
-   * The reference provider bumps a per-user session version when the user revokes all
-   * sessions, but does not expose that value to relying parties outside introspection.
-   * Supply a resolver - an authenticated call to your own API, a shared cache, a DB read
-   * - to make revocation enforceable without a confidential client.
-   *
-   * Return `null`/`undefined` when the version cannot be determined; the check then fails
-   * closed rather than assuming the session is still good.
+   * @deprecated Since 3.0.0 - pass `resolveSessionVersion` to the WilsoonID profile, which still reads this as a fallback.
    */
   resolveSessionVersion?: (userId: string) => Promise<number | null | undefined> | number | null | undefined;
+  /**
+   * Where verified tokens carry the user's roles, e.g. `"roles"` (Entra ID) or `"resource_access.my-app.roles"` (Keycloak).
+   * Unset means {@link AuthenticatedUser.roles} is empty unless the profile fills it.
+   */
+  rolesClaim?: ClaimSelector;
+  /**
+   * Where verified tokens carry the user's permissions, e.g. `"permissions"` (Auth0, WilsoonID).
+   * Unset means {@link AuthenticatedUser.permissions} is empty unless the profile fills it.
+   */
+  permissionsClaim?: ClaimSelector;
+  /**
+   * Prefix for the names the client stores its tokens and transient values under (default `"oidc_"`).
+   * Changing it on a live app signs every user out, because their stored tokens sit under the old names.
+   */
+  storagePrefix?: string;
+  /** The provider profile: claim mapping, storage names and provider-specific functions. See `createAuthClient`. */
+  profile?: ProviderProfile<string, object>;
 }
 
 /** Tuning options for the remote JWKS used to verify token signatures. */
@@ -175,19 +179,13 @@ export interface TokenResponse {
 }
 
 /**
- * The roles this library models.
+ * The two legacy WilsoonID roles.
  *
- * Deliberately a closed set: a `role` claim arriving from the network is narrowed against
- * {@link USER_ROLES} rather than asserted, so a value the library does not model throws instead
- * of being quietly treated as a known one.
- *
- * This is the library's one hardcoded assumption about the provider's vocabulary. A provider
- * that issues other roles needs this union and {@link USER_ROLES} widened together - see
- * "Roles" in the repository README. Everything else, `amr` included, compares plain strings.
+ * @deprecated Since 3.0.0 - core no longer models a provider's role vocabulary. Read {@link AuthenticatedUser.roles} or {@link AuthenticatedUser.permissions} instead.
  */
 export type UserRole = "admin" | "user";
 
-/** The runtime counterpart of {@link UserRole}, used to validate the claim at the trust boundary. */
+/** @deprecated Since 3.0.0 - see {@link UserRole}. */
 export const USER_ROLES: readonly UserRole[] = ["admin", "user"];
 
 /**
@@ -218,21 +216,27 @@ export interface ProfileUser {
  * This is the only type in the library that is safe to authorize on.
  */
 export interface AuthenticatedUser extends ProfileUser {
+  /** Roles read through {@link AuthConfig.rolesClaim} or the profile. Empty unless one of them is configured. */
+  roles: string[];
   /**
-   * The user's role.
-   *
-   * Validated against {@link USER_ROLES} at the trust boundary: an unrecognised value
-   * throws rather than being asserted into the union, and an absent value falls back to
-   * the least-privileged role (`'user'`).
+   * Permissions read through {@link AuthConfig.permissionsClaim} or the profile. Empty unless one of them is configured.
+   * When the session's access token verifies and was issued to this client, its permissions are merged in, since many providers carry them only there.
    */
-  role: UserRole;
+  permissions: string[];
+  /**
+   * The legacy WilsoonID role, set only by the `wilsoon()` profile.
+   *
+   * @deprecated Since 3.0.0 - use {@link AuthenticatedUser.roles} or {@link AuthenticatedUser.permissions}.
+   */
+  role?: UserRole;
   /** Authentication methods used for this session (the `amr` claim). Empty if absent. */
   authMethods: string[];
+  /** The provider session this identity belongs to (the `sid` claim), when present. */
+  sid?: string;
   /**
-   * The session version asserted by the token, used for global revocation.
+   * The WilsoonID session version, set only by the `wilsoon()` profile.
    *
-   * Optional because the provider omits it in edge cases (e.g. a deleted user record).
-   * {@link AuthClient.isSessionCurrent} fails closed when it is missing.
+   * @deprecated Since 3.0.0 - provider-specific; use the profile's `isSessionCurrent`.
    */
   sessionVersion?: number;
   /** The verified `iss` claim. */
@@ -259,7 +263,7 @@ export interface AuthenticatedUser extends ProfileUser {
 /**
  * The shape returned by the unverified decode helpers.
  *
- * @deprecated Only for display and debugging. Authorize on {@link AuthenticatedUser}.
+ * Only for display and debugging - never authorize on it. Authorize on {@link AuthenticatedUser}.
  */
 export interface UnverifiedUser {
   /** The `id`/`sub` claim as it appeared in the token, if any. */
@@ -277,14 +281,6 @@ export interface UnverifiedUser {
   /** The raw `session_version` claim. Not validated, not verified. */
   sessionVersion?: number;
 }
-
-/**
- * @deprecated Ambiguous: it claimed verified authorization fields for values that the
- * userinfo endpoint never returns. Use {@link AuthenticatedUser} for verified identities,
- * {@link ProfileUser} for userinfo profiles, or {@link UnverifiedUser} for decoded-only
- * claims.
- */
-export type User = AuthenticatedUser;
 
 /**
  * Who an access token represents.
@@ -340,13 +336,19 @@ export interface AccessTokenClaims {
   subject: string;
   /**
    * Who the token represents: a user who authenticated, or a client acting as itself through the `client_credentials` grant.
-   * Derived from the provider's `token_use` claim, defaulting to `'user'` when absent - the provider stamps `token_use: "client"` only on machine tokens, so a token without it predates the grant or came from a user flow.
+   * Decided by {@link AuthConfig.detectMachineToken}, then the profile's `isMachineToken`, then RFC 9068's `sub === client_id`; `'user'` otherwise.
    */
   tokenUse: TokenUse;
   /** The client the token was issued to, when the provider includes it. */
   clientId?: string;
   /** Granted scopes, split from the `scope` claim. */
   scopes: string[];
+  /** Roles read through {@link AuthConfig.rolesClaim} or the profile. */
+  roles: string[];
+  /** Permissions read through {@link AuthConfig.permissionsClaim} or the profile. */
+  permissions: string[];
+  /** The provider session the token belongs to (the `sid` claim), when present. */
+  sid?: string;
   /** The verified `iss` claim. */
   issuer: string;
   /** The verified `aud` claim(s). */
@@ -363,7 +365,7 @@ export interface AccessTokenClaims {
 
 /**
  * An RFC 7662 token introspection response.
- * Beyond the RFC's own fields, the reference provider adds `role`, `amr` and - the reason to call it at all - the **live** `session_version`, so a "sign out everywhere" is honoured before the token's own expiry rather than after it.
+ * Fields past the RFC's own (`role`, `session_version`, `permissions`, `sid`) are provider extensions and may be absent.
  */
 export interface IntrospectionResponse {
   /** Whether the provider considers the token usable right now. */
@@ -398,6 +400,10 @@ export interface IntrospectionResponse {
   token_session_version?: number;
   /** `"client"` when the token came from the `client_credentials` grant; absent otherwise. */
   token_use?: string;
+  /** What the user holds right now for the calling client, when the provider answers live. */
+  permissions?: string[];
+  /** The provider session the token belongs to. */
+  sid?: string;
   /** Any additional fields the provider returns. */
   [claim: string]: unknown;
 }
@@ -405,15 +411,13 @@ export interface IntrospectionResponse {
 /** Options for {@link AuthClient.verifyIdToken}. */
 export interface VerifyIdTokenOptions {
   /**
-   * The nonce that was sent on the authorization request. When provided it must match
-   * the token's `nonce` claim, which is what binds the token to your request.
+   * The nonce that was sent on the authorization request. When provided it must match the token's `nonce` claim, which is what binds the token to your request.
    */
   nonce?: string;
   /** Reject the token if `auth_time` is older than this many seconds (step-up checks). */
   maxAuthAgeSeconds?: number;
   /**
    * Require the token's `acr` claim to be one of these values.
-   *
    * Requesting `acr_values` is a demand the provider is free to ignore, and one that ignores it returns a perfectly valid token describing a weaker authentication. Checking here is what turns the request into a guarantee.
    */
   requiredAcr?: string | string[];
@@ -431,7 +435,7 @@ export interface VerifyAccessTokenOptions {
   /**
    * Accept a `client_credentials` machine token (default `false`).
    * A machine token is refused with {@link MachineTokenNotAllowedError}. This fails closed on purpose: a machine token's `sub` is a `client_id`, and an endpoint written for users would otherwise treat it as one.
-   * Turn it on only where the caller genuinely handles both, and branch on {@link AccessTokenClaims.tokenUse} when it does.
+   * Turn it on only where the caller genuinely handles both and separate it based on {@link AccessTokenClaims.tokenUse} when it does.
    */
   allowMachineTokens?: boolean;
 }
@@ -455,7 +459,7 @@ export interface AuthorizeUrlOptions {
   persist?: boolean;
   /** Overrides the configured scopes for this request. */
   scope?: string[];
-  /** OIDC `prompt` value. The provider accepts `none`, `reauthenticate` and `consent`. */
+  /** OIDC `prompt` value: `none`, `login`, `consent` or `select_account`. Prefer `silentAuthorize()` over `none`. */
   prompt?: string;
   /** OIDC `acr_values`, used to request a stronger authentication context. */
   acrValues?: string | string[];
@@ -507,4 +511,15 @@ export interface CallbackResult {
   user: AuthenticatedUser | null;
   /** The validated `state` value. */
   state: string;
+}
+
+/** Options for {@link AuthClient.silentAuthorize}. */
+export interface SilentAuthorizeOptions extends Omit<AuthorizeUrlOptions, "prompt" | "persist"> {
+  /**
+   * `"iframe"` (default) runs the request in a hidden iframe and resolves with the result; `"redirect"` navigates the page itself.
+   * After a redirect, finish with `handleCallback()` and treat {@link isSilentAuthError} as "not signed in".
+   */
+  mode?: "iframe" | "redirect";
+  /** How long the iframe may take before the attempt counts as "not signed in", in ms (default 10000). */
+  timeoutMs?: number;
 }

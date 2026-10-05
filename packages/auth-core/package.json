@@ -1,6 +1,6 @@
 {
   "name": "@wilsoon/auth-core",
-  "version": "2.3.0",
+  "version": "3.0.0",
   "description": "Framework-agnostic OpenID Connect relying party: discovery, PKCE, and token verification for browsers, Node and edge runtimes",
   "keywords": [
     "oidc",

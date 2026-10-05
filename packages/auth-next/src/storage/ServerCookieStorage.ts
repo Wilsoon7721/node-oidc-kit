@@ -1,4 +1,4 @@
-import { AuthStorage, STORAGE_KEYS, StorageUnavailableError } from '@wilsoon/auth-core';
+import { AuthStorage, StorageKeys, StorageUnavailableError } from '@wilsoon/auth-core';
 
 /** Cookie attributes used when this storage writes. */
 export interface ServerCookieStorageOptions {
@@ -14,9 +14,12 @@ export interface ServerCookieStorageOptions {
     transientMaxAgeSeconds?: number;
     /** Lifetime of the token cookie (default 1 year, matching the identity provider). */
     tokenMaxAgeSeconds?: number;
+    /** The client's storage names (`client.storageKeys`), for a token key that does not end in `tokens`. */
+    storageKeys?: Partial<StorageKeys>;
 }
 
-const TRANSIENT_KEYS: string[] = [STORAGE_KEYS.state, STORAGE_KEYS.nonce, STORAGE_KEYS.codeVerifier];
+/** The token blob is the only long-lived value: `oidc_tokens`, `wilsoon_id_tokens`, `<prefix>tokens`. */
+const isTokenKey = (key: string, keys?: Partial<StorageKeys>): boolean => (keys?.tokens ? key === keys.tokens : key.endsWith('tokens'));
 
 /**
  * An {@link AuthStorage} backed by the Next.js cookie store.
@@ -40,7 +43,7 @@ export class ServerCookieStorage implements AuthStorage {
 
     /** @throws {StorageUnavailableError} If this context cannot set cookies. */
     setItem(key: string, value: string): void {
-        const isTransient = TRANSIENT_KEYS.includes(key);
+        const isTransient = !isTokenKey(key, this.options.storageKeys);
 
         try {
             this.cookieStore.set({

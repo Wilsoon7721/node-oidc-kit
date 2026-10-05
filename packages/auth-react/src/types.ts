@@ -1,21 +1,18 @@
 import type { MouseEvent } from 'react';
-import { AuthenticatedUser, ProfileUser, TokenResponse } from '@wilsoon/auth-core';
+import { AuthClient, AuthenticatedUser, ProfileUser, TokenResponse } from '@wilsoon/auth-core';
 
 /**
  * The user in the React session.
  *
- * A discriminated union, because the two ways a browser session comes into being differ in
- * what they can prove:
+ * A discriminated union, because the ways a browser session comes into being differ in what they can prove:
  *
- * - after the OIDC callback the ID token has been verified, so `role`, `authMethods` and
- *   `sessionVersion` are present and trustworthy;
- * - after hydrating from the HttpOnly cookie the app has only the userinfo profile, which
- *   carries no authorization claims at all.
+ * - after the OIDC callback or a silent restore the ID token has been verified, so `roles`, `permissions` and `authMethods` are present and trustworthy;
+ * - after a profile's non-standard restore (such as a provider cookie) the app has only a userinfo profile, which carries no authorization claims at all.
  *
  * Narrow on `verified` before reading anything security-relevant:
  *
  * ```tsx
- * if (user?.verified && user.role === 'admin') showAdminNav();
+ * if (user?.verified && user.permissions.includes('games_portal.admin')) showAdminNav();
  * ```
  *
  * Client-side checks are for rendering. Every real decision still belongs on the server.
@@ -23,6 +20,15 @@ import { AuthenticatedUser, ProfileUser, TokenResponse } from '@wilsoon/auth-cor
 export type SessionUser =
     | ({ verified: true } & AuthenticatedUser)
     | ({ verified: false } & ProfileUser);
+
+/**
+ * How a page load restores the session.
+ *
+ * - `"silent"`: a `prompt=none` request in a hidden iframe, falling back to the profile's `restoreSession` when that finds nothing.
+ * - `"profile"`: only the profile's `restoreSession`, the 2.x behaviour.
+ * - `"none"`: nothing; the user is signed out until they log in.
+ */
+export type SessionRestore = 'silent' | 'profile' | 'none';
 
 export interface AuthState {
     user: SessionUser | null;
@@ -38,13 +44,15 @@ export interface AuthState {
      */
     login: (options?: LoginOptions | MouseEvent<HTMLElement>) => Promise<void>;
     logout: (returnTo?: string) => Promise<void>;
+    /** The underlying client, for standard methods the hook does not wrap. */
+    client: AuthClient;
 }
 
 /** Options for starting a login. */
 export interface LoginOptions {
     /** Overrides the configured scopes. */
     scope?: string[];
-    /** OIDC `prompt` value. */
+    /** OIDC `prompt` value: `login` forces re-authentication. */
     prompt?: string;
     /** OIDC `acr_values`, to request a stronger authentication context. */
     acrValues?: string | string[];

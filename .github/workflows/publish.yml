@@ -1,12 +1,15 @@
 name: Publish
 
+# Publishes when a push to main changes a package version, or on demand.
+# Only versions npm doesn't have yet go out, so any other edit to a package.json publishes nothing.
+# Pull requests never trigger it, and a manual run from any branch but main is a dry run.
 on:
+  push:
+    branches: [main]
+    paths:
+      - packages/*/package.json
   workflow_dispatch:
     inputs:
-      packages:
-        description: "'all', or one pnpm filter such as @wilsoon/auth-machine"
-        type: string
-        default: all
       dry_run:
         description: "Run every check and pack the tarballs, but publish nothing"
         type: boolean
@@ -17,17 +20,19 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
-  id-token: write
+  contents: write # pushes the release tags
+  id-token: write # npm provenance and trusted publishing
 
 jobs:
   publish:
+    # Forks have no business publishing, whatever their workflows say.
+    if: github.repository == 'Wilsoon7721/node-oidc-kit'
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -35,33 +40,111 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - run: pnpm install --frozen-lockfile --ignore-scripts
+      # Decides what to release, and refuses a release that looks unfinished:
+      # - auth-core, auth-react and auth-next must share one version (auth-machine is independent);
+      # - every version going out needs its entry in CHANGELOG.md.
+      - name: Find unpublished versions
+        id: plan
+        run: |
+          node <<'JS'
+          const fs = require("fs");
+          const { execFileSync } = require("child_process");
 
-      - run: pnpm build
-      - run: pnpm typecheck
-      - run: pnpm lint
-      - run: pnpm test
+          const LOCKSTEP = ["@wilsoon/auth-core", "@wilsoon/auth-react", "@wilsoon/auth-next"];
+          const ORDER = [...LOCKSTEP, "@wilsoon/auth-machine"];
+          const changelog = fs.readFileSync("CHANGELOG.md", "utf8").split(/\r?\n/);
+
+          const packages = fs.readdirSync("packages")
+            .map((dir) => JSON.parse(fs.readFileSync(`packages/${dir}/package.json`, "utf8")))
+            .filter((pkg) => !pkg.private)
+            .sort((a, b) => ORDER.indexOf(a.name) - ORDER.indexOf(b.name));
+
+          const fail = (message) => {
+            console.log(`::error::${message}`);
+            process.exit(1);
+          };
+
+          const kit = new Set(packages.filter((pkg) => LOCKSTEP.includes(pkg.name)).map((pkg) => pkg.version));
+          if (kit.size > 1) fail(`${LOCKSTEP.join(", ")} must share one version, but have ${[...kit].join(", ")}. Bump all three together.`);
+
+          // Only a definite "not found" counts as unpublished. Any other failure stops the run rather than guessing.
+          const onNpm = (pkg) => {
+            try {
+              execFileSync("npm", ["view", `${pkg.name}@${pkg.version}`, "version", "--registry", "https://registry.npmjs.org"], { stdio: "pipe" });
+              return true;
+            } catch (error) {
+              const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+              if (/E404|404 Not Found/.test(output)) return false;
+              fail(`Could not ask npm about ${pkg.name}@${pkg.version}: ${output.trim().split("\n")[0]}`);
+            }
+          };
+
+          const pending = packages.filter((pkg) => !onNpm(pkg));
+          for (const pkg of pending) {
+            const documented = LOCKSTEP.includes(pkg.name)
+              ? changelog.includes(`## ${pkg.version}`)
+              : changelog.some((line) => line.startsWith("#") && line.includes(pkg.name.split("/")[1]) && line.includes(pkg.version));
+            if (!documented) fail(`${pkg.name}@${pkg.version} has no entry in CHANGELOG.md. Add one, or revert the version bump.`);
+          }
+
+          if (pending.length === 0) console.log("::notice::Every package version is already on npm. Nothing to publish.");
+          for (const pkg of pending) console.log(`::notice::Will publish ${pkg.name}@${pkg.version}`);
+
+          // One tag per release: v<version> for the kit, <short name>@<version> for anything versioned on its own.
+          const tags = new Set(pending.map((pkg) => (LOCKSTEP.includes(pkg.name) ? `v${pkg.version}` : `${pkg.name.split("/")[1]}@${pkg.version}`)));
+
+          const out = fs.createWriteStream(process.env.GITHUB_OUTPUT, { flags: "a" });
+          out.write(`pending=${pending.map((pkg) => `${pkg.name}@${pkg.version}`).join(" ")}\n`);
+          out.write(`tags=${[...tags].join(" ")}\n`);
+          out.end();
+          JS
+
+      - name: Build and check
+        if: steps.plan.outputs.pending != ''
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm build
+          pnpm typecheck
+          pnpm lint
+          git diff --exit-code
+          pnpm test
 
       - name: Show what would be published
+        if: steps.plan.outputs.pending != ''
         env:
-          PACKAGES: ${{ inputs.packages }}
+          PENDING: ${{ steps.plan.outputs.pending }}
         run: |
-          if [ "$PACKAGES" = "all" ]; then
-            pnpm -r publish --dry-run --no-git-checks
-          else
-            pnpm --filter "$PACKAGES" publish --dry-run --no-git-checks
-          fi
+          for spec in $PENDING; do
+            pnpm --filter "${spec%@*}" publish --dry-run --no-git-checks
+          done
 
+      # A version with a pre-release part (3.1.0-beta.1) goes to the `next` tag, so `npm install` keeps getting the last stable one.
       - name: Publish
-        if: ${{ !inputs.dry_run }}
+        if: steps.plan.outputs.pending != '' && !inputs.dry_run && github.ref == 'refs/heads/main'
         env:
-          PACKAGES: ${{ inputs.packages }}
+          PENDING: ${{ steps.plan.outputs.pending }}
           # Empty when the repo has no NPM_TOKEN secret, which is the intended end state
           # once trusted publishing is confirmed working.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ "$PACKAGES" = "all" ]; then
-            pnpm -r publish --provenance --access public --no-git-checks
-          else
-            pnpm --filter "$PACKAGES" publish --provenance --access public --no-git-checks
-          fi
+          for spec in $PENDING; do
+            name="${spec%@*}"
+            version="${spec##*@}"
+            tag=latest
+            case "$version" in *-*) tag=next ;; esac
+            pnpm --filter "$name" publish --provenance --access public --no-git-checks --tag "$tag"
+          done
+
+      - name: Tag the release
+        if: steps.plan.outputs.pending != '' && !inputs.dry_run && github.ref == 'refs/heads/main'
+        env:
+          TAGS: ${{ steps.plan.outputs.tags }}
+        run: |
+          for tag in $TAGS; do
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+              echo "::notice::Tag $tag already exists."
+              continue
+            fi
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "refs/tags/$tag"
+          done

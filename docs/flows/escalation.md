@@ -8,8 +8,9 @@ Step-up through a back channel: the client asks the provider to require a strong
 a URL in front of the user, and polls for the verdict.
 
 {% callout type="warning" title="A provider extension, not a standard" %}
-Escalation is specific to the reference provider. It is not part of OIDC or any RFC, it is not
-discoverable, and pointing this at Okta, Auth0 or Keycloak will find no endpoint to talk to.
+Escalation is specific to WilsoonID, and lives in its provider profile rather than in core. It
+is not part of OIDC or any RFC, it is not discoverable, and Okta, Auth0 or Keycloak have no
+endpoint for it.
 
 For step-up that works against any conforming provider, use
 [step-up authentication](/flows/step-up) - `acr_values` and `max_age` on an ordinary
@@ -19,7 +20,12 @@ qualifies.
 {% /callout %}
 
 ```ts
-await client.reauthorize(["passkey", "fido"], true, {
+import { createAuthClient } from "@wilsoon/auth-core";
+import { wilsoon } from "@wilsoon/auth-provider-wilsoon";
+
+const client = createAuthClient({ ...config, profile: wilsoon() });
+
+await client.wilsoon.reauthorize(["passkey", "fido"], true, {
   idTokenHint: tokens.id_token,
   openUrl: (url) => console.log(`Confirm at: ${url}`),
 });
@@ -52,7 +58,7 @@ when you need to own the loop:
 | `pollEscalation(request)`   | Back channel       | One poll: `pending`, or throws terminally             |
 
 ```ts
-const request = await client.createEscalation({
+const request = await client.wilsoon.createEscalation({
   use: ["passkey"],
   force: true,
   idTokenHint: tokens.id_token,
@@ -89,7 +95,7 @@ else about the request.
 polls once _before_ calling `openUrl`, so that case shows the user nothing at all:
 
 ```ts
-const result = await client.reauthorize(["passkey"], false, {
+const result = await client.wilsoon.reauthorize(["passkey"], false, {
   idTokenHint: tokens.id_token,
   openUrl, // never called if the session already qualifies
 });
@@ -124,7 +130,7 @@ of stopping on its own clock. If a local timer and the server disagree - a user 
 available to bound a hung process, but it is off by default on purpose.
 
 ```ts
-await client.reauthorize(["passkey"], true, {
+await client.wilsoon.reauthorize(["passkey"], true, {
   idTokenHint,
   openUrl,
   onPending: ({ attempt, interval }) => console.log(`waiting… (${attempt})`),
@@ -154,7 +160,7 @@ It exists so the outcome can be handed to a resource server that trusts the prov
 but not you. A boolean returned by your own code proves nothing to anybody else.
 
 ```ts
-const proof = await client.verifyEscalationToken(result.escalationToken!);
+const proof = await client.wilsoon.verifyEscalationToken(result.escalationToken!);
 // proof.satisfiedBy === "passkey"
 ```
 
@@ -170,6 +176,9 @@ that a user is signed in.
 
 ## Configuration
 
-Escalation is not an OIDC endpoint, so discovery says nothing about it. The library assumes
-`<issuer>/api/escalate`; override with `escalationEndpoint` if your provider mounts it
+Escalation is not an OIDC endpoint, so discovery says nothing about it. The profile assumes
+`<issuer>/api/escalate`; pass `wilsoon({ escalationEndpoint })` if the provider mounts it
 elsewhere. The poll endpoint is always `<escalationEndpoint>/poll`.
+
+The 2.x calls on the client itself (`client.reauthorize()` and the rest) still work when the
+profile is configured. They warn once and forward to `client.wilsoon`, and are removed in 4.0.

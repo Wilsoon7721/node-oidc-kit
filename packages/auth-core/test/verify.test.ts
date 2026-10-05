@@ -1,5 +1,5 @@
 import { SignJWT } from 'jose';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
     AuthClient,
     ClaimValidationError,
@@ -36,9 +36,13 @@ describe('verifyIdToken', () => {
         const user = await client().verifyIdToken(await idp.mintIdToken());
 
         expect(user.id).toBe('user-1');
-        expect(user.role).toBe('admin');
         expect(user.authMethods).toEqual(['mfa', 'fido', 'hw']);
-        expect(user.sessionVersion).toBe(3);
+        // Standards-only: provider vocabulary stays in `claims` until a profile or claim path maps it.
+        expect(user.roles).toEqual([]);
+        expect(user.permissions).toEqual([]);
+        expect(user.role).toBeUndefined();
+        expect(user.sessionVersion).toBeUndefined();
+        expect(user.claims.role).toBe('admin');
         expect(user.audience).toBe(CLIENT_ID);
         expect(user.issuer).toBe(idp.issuer);
         expect(user.email).toBe('ada@example.com');
@@ -123,25 +127,6 @@ describe('verifyIdToken', () => {
 
         await expect(client().verifyIdToken(stale, { maxAuthAgeSeconds: 300 })).rejects.toThrow(ClaimValidationError);
         await expect(client().verifyIdToken(await idp.mintIdToken(), { maxAuthAgeSeconds: 300 })).resolves.toBeDefined();
-    });
-
-    it('validates role at the boundary instead of asserting it', async () => {
-        await expect(client().verifyIdToken(await idp.mintIdToken({ role: 'superuser' }))).rejects.toThrow(ClaimValidationError);
-
-        const noRole = await client().verifyIdToken(await idp.mintIdToken({ role: undefined }));
-        expect(noRole.role).toBe('user');
-    });
-
-    it('reads security claims from a nested oidc_fields payload as well as a flat one', async () => {
-        const nested = await idp.mintIdToken({
-            role: undefined,
-            session_version: undefined,
-            oidc_fields: { role: 'user', session_version: 7, id: 'user-1' },
-        });
-
-        const user = await client().verifyIdToken(nested);
-        expect(user.role).toBe('user');
-        expect(user.sessionVersion).toBe(7);
     });
 
     it('caches the key set across verifications', async () => {
@@ -241,16 +226,13 @@ describe('discovery', () => {
 });
 
 describe('unverified decode paths', () => {
-    it('parseIdToken still decodes, but warns and never claims verification', async () => {
-        const warn = vi.spyOn(console, 'warn').mockImplementation(() => { });
+    it('decodeIdTokenUnsafe decodes a forged token without verifying it', () => {
         const forged = unsignedToken({ sub: 'attacker', role: 'admin', amr: ['mfa'], session_version: 99 });
 
-        const decoded = client().parseIdToken(forged);
+        const decoded = client().decodeIdTokenUnsafe(forged);
 
         expect(decoded.role).toBe('admin');
         expect(decoded.authMethods).toEqual(['mfa']);
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining('does not verify'));
-        warn.mockRestore();
     });
 
     it('decodeIdTokenUnsafe throws on a malformed token', () => {
@@ -347,21 +329,9 @@ describe('machine tokens (client_credentials)', () => {
         await expect(client().verifyMachineToken(elsewhere)).rejects.toThrow(TokenVerificationError);
     });
 
-    it('refuses to resolve a platform session from a machine token', async () => {
-        await expect(confidential().verifyPlatformSession(await mintMachineToken()))
-            .rejects.toThrow(MachineTokenNotAllowedError);
-    });
-
     it('refuses to resolve a session from a cookie holding a machine token', async () => {
         await expect(confidential().resolveSession({ access_token: await mintMachineToken() }))
             .rejects.toThrow(MachineTokenNotAllowedError);
-    });
-
-    it('refuses a session-version check on a machine token rather than failing as undeterminable', async () => {
-        await expect(confidential().isSessionCurrent(
-            { id: MACHINE_CLIENT, sessionVersion: 1 },
-            { token: await mintMachineToken() }
-        )).rejects.toThrow(MachineTokenNotAllowedError);
     });
 
     it('catches a machine token from a provider that emits no token_use', async () => {

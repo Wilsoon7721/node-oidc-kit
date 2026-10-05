@@ -29,7 +29,7 @@ Full documentation, with slightly more depth than this README, is at
 - [Pointing it at your own provider](#pointing-it-at-your-own-provider)
 - [Storage: the one thing to understand](#storage-the-one-thing-to-understand)
 - [The security model](#the-security-model)
-- [Things that are still specific to one provider](#things-that-are-still-specific-to-one-provider)
+- [Provider profiles](#provider-profiles)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -52,10 +52,10 @@ As such, I built this authentication library in order to plug my provider into a
 
 Using anything else - Astro, SvelteKit, Hono, Express? Use `auth-core` directly and write one [storage adapter](#storage-the-one-thing-to-understand). That's the whole integration.
 
-The first three are versioned together on a shared 2.x line. `auth-machine` has no dependency on the others, so it is versioned independently and is currently 0.x.
+The first three are versioned together on a shared 3.x line. `auth-machine` has no dependency on the others, so it is versioned independently and is currently 0.x.
 
-For end-to-end recipes per framework, see **[INTEGRATION.md](INTEGRATION.md)**; for what
-changed in 2.0 and how to migrate from 1.x, see **[CHANGELOG.md](CHANGELOG.md)**. This README
+For end-to-end recipes per framework, see the **[recipes](https://docs.wilsoon.dev/node-oidc-kit/recipes/nextjs)**; for what
+changed in 3.0 and how to migrate, see **[CHANGELOG.md](CHANGELOG.md)**. This README
 is about the design and about running the project; that one is about wiring an app up.
 
 ## Quick start
@@ -73,6 +73,7 @@ export const authConfig = {
   issuer: "https://id.example.com",
   redirectUri: "https://app.example.com/api/callback",
   scope: ["openid", "profile", "email", "offline_access"],
+  rolesClaim: "roles", // where your provider puts roles, if it does
 };
 
 // One client per request, holding this request's cookies.
@@ -95,8 +96,8 @@ client.saveTokens(tokens);
 
 ```ts
 // On any later request
-const user = await client.resolveSession(client.getStoredTokens()!);
-if (user.role !== "admin") return forbidden();
+const user = await client.resolveSession(client.getStoredTokens() ?? {});
+if (!hasRole(user, "admin")) return forbidden(); // hasRole from @wilsoon/auth-core
 ```
 
 `handleCallback()` validates `state`, exchanges the code with its PKCE verifier, verifies
@@ -114,10 +115,10 @@ Your provider needs to offer:
 | `/.well-known/openid-configuration` with `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `jwks_uri` | Every other endpoint is discovered from here | `DiscoveryError` at startup |
 | `issuer` in that document matching your configured `issuer` | Stops tokens being validated against an issuer you didn't choose | `IssuerMismatchError` - set `expectedIssuer` if the difference is deliberate |
 | Authorization code flow with **PKCE (`S256`)** | The only implemented flow here, there is no implicit flow. | Nothing will work |
-| **RS256** ID token signatures | See [algorithms](#2-rs256-only) | `ERR_JOSE_ALG_NOT_ALLOWED` |
+| **RS256** ID token signatures | See [RS256 only](#2-rs256-only) | `ERR_JOSE_ALG_NOT_ALLOWED` |
 | `nonce` added into the ID token | ID token replay protection (also mandatory in the OIDC spec) | `NonceMismatchError` on every login |
 | `end_session_endpoint` | RP-initiated logout | `getLogoutUrl()` throws `LogoutError`, log out locally instead |
-| `introspection_endpoint` (RFC 7662) | Live revocation, and roles for resource servers | `verifyPlatformSession()` and introspection-based `isSessionCurrent()` unavailable; plain `verifyIdToken()` is unaffected |
+| `introspection_endpoint` (RFC 7662) | Live access checks, and shared platform sessions | `liveAccess()`, `enforce: "live"` and shared sessions unavailable; plain `verifyIdToken()` is unaffected |
 
 Everything below `nonce` is optional. If it doesn't exist, you lose a feature, but the core functionality remains.
 
@@ -125,19 +126,23 @@ Two session models are supported, and which one you're in decides which methods 
 
 - **Per-application session** (standard OIDC). Each app has its own cookie and its own ID
   token. Use `verifyIdToken()` / `getSession()`.
-- **Platform session** (one cookie across subdomains). Set `apiAudience` and
-  `clientSecret`, and use `resolveSession()`, which falls back to `verifyPlatformSession()` when the cookie belongs to another app.
+- **Platform session** (one cookie across subdomains). Needs a [provider profile](#provider-profiles) that
+  resolves shared sessions, plus `apiAudience` and `clientSecret`. Use `resolveSession()`, which hands a
+  sibling app's cookie to the profile, or throws `FOREIGN_SESSION` without one.
 
 ## Storage: the one thing to understand
 
 The library persists 4 values:
 
-| Key                         | Lifetime           | Purpose                                        |
-| --------------------------- | ------------------ | ---------------------------------------------- |
-| `STORAGE_KEYS.tokens`       | The session        | The token response blob                        |
-| `STORAGE_KEYS.state`        | One login, minutes | CSRF binding between authorize and callback    |
-| `STORAGE_KEYS.nonce`        | One login, minutes | Binds the ID token to _this_ authorize request |
-| `STORAGE_KEYS.codeVerifier` | One login, minutes | The PKCE secret                                |
+| Key (default name)               | Lifetime           | Purpose                                        |
+| -------------------------------- | ------------------ | ---------------------------------------------- |
+| `tokens` (`oidc_tokens`)         | The session        | The token response blob                        |
+| `state` (`oidc_state`)           | One login, minutes | CSRF binding between authorize and callback    |
+| `nonce` (`oidc_nonce`)           | One login, minutes | Binds the ID token to _this_ authorize request |
+| `codeVerifier` (`oidc_verifier`) | One login, minutes | The PKCE secret                                |
+
+`storagePrefix` changes the prefix, a provider profile can set exact names, and
+`client.storageKeys` reports the names a client actually uses.
 
 The `state`, `nonce`, and `codeVerifier` are written when you build the authorize URL and read after the provider redirects back - a _different request_, often to a different process. Somewhere durable across that redirect has to hold them. That "where" is the only thing that differs between a browser SPA, Next.js, Astro, and an Express app, so it's the only thing the library asks you to provide:
 
@@ -157,7 +162,6 @@ interface AuthStorage {
 | `MemoryStorage`       | `auth-core` | Tests, and single-process flows where authorize and callback are handled by the same instance. Will not survive a restart.                                                                                                                                                                             |
 | `UnavailableStorage`  | `auth-core` | The server default when you pass nothing. Every method throws `StorageUnavailableError` naming the operation and the fix. It exists because the old default (`{} as AuthStorage`) type-checked as valid storage and then died with `TypeError: setItem is not a function` far from the actual mistake. |
 | `ServerCookieStorage` | `auth-next` | The Next.js cookie store. Writes `HttpOnly` + `SameSite=Lax`, with a short lifetime for the transient three and a long one for the token blob. Throws a useful error in a Server Component, where Next.js forbids cookie writes.                                                                       |
-| `CookieStorage`       | `auth-core` | **Deprecated.** Used to be the default, but now the provider sets the token cookie `HttpOnly` which means no browser-side cookie adapter can ever see it again. Kept so existing calls still compile. Use `hydrateSession()` instead.                                                                  |
 
 ### Writing your own
 
@@ -221,21 +225,21 @@ const client = new AuthClient(config, new AstroServerStorage(cookies, origin));
 7. **A write that fails should throw an error, not silently fail** - Unless the failure to write is deliberate, as in the Next.js middleware, where the _response_ owns cookie writes and the storage is read-only by design.
 8. **Don't share one instance across requests** - Storage is per-request state, and the `AuthClient` is what you cache (see `getCachedClient` in `auth-next`, which reuses the JWKS cache across requests).
 
-To put the token blob under a different cookie name, map it inside your adapter - that's what the Next.js middleware's `cookieName` option does. `STORAGE_KEYS` itself is fixed.
+To put the token blob under a cookie name that follows neither the prefix nor the profile, map it inside your adapter - that's what the Next.js middleware's `cookieName` option does.
 
 ## The security model
 
-**Only five methods** produce a value you may base authorization decisions on:
+**Only a handful of methods** produce a value you may base authorization decisions on:
 
 | Method                                    | Verified?                                      | Gives you                                                                   |
 | ----------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------- |
-| `verifyIdToken()`                         | Signature, `iss`, `aud`, `exp`, `nonce`, `evt` | `AuthenticatedUser` - `role`, `authMethods`, `sessionVersion`               |
-| `verifyAccessToken()`                     | Signature, `iss`, pinned `aud`, `exp`, scopes  | `AccessTokenClaims` - no role, plus `tokenUse`                              |
-| `verifyPlatformSession()`                 | The above + introspection                      | `AuthenticatedUser` with **current** role and session version               |
-| `verifyMachineToken()`                    | The access token checks, plus `token_use`      | `MachineClient` - a `clientId`, and deliberately no user fields             |
-| `verifyEscalationToken()`                 | Signature, `iss`, `aud`, `exp`, `evt`          | `VerifiedEscalation` - proof one step-up happened                           |
-| `getUser()` / `hydrateSession()`          | Transport only                                 | `ProfileUser` - display claims, no `role` field to prevent potential misuse |
-| `decodeIdTokenUnsafe()`, `parseIdToken()` | **Nothing**                                    | `UnverifiedUser` - may be attacker-controlled by definition                 |
+| `verifyIdToken()`                         | Signature, `iss`, `aud`, `exp`, `nonce`, `evt` | `AuthenticatedUser` - `roles`, `permissions`, `authMethods`                 |
+| `verifyAccessToken()`                     | Signature, `iss`, pinned `aud`, `exp`, scopes  | `AccessTokenClaims` - `roles`, `permissions`, `tokenUse`                    |
+| `wilsoon.verifyPlatformSession()`         | The above + introspection                      | `AuthenticatedUser` with **current** permissions (WilsoonID profile)        |
+| `verifyMachineToken()`                    | The access token checks, plus machine detection | `MachineClient` - a `clientId`, and deliberately no user fields             |
+| `wilsoon.verifyEscalationToken()`         | Signature, `iss`, `aud`, `exp`, `evt`          | `VerifiedEscalation` - proof one step-up happened (WilsoonID profile)       |
+| `getUser()`, a profile's restore          | Transport only                                 | `ProfileUser` - display claims, no `roles` to prevent potential misuse      |
+| `decodeIdTokenUnsafe()`                   | **Nothing**                                    | `UnverifiedUser` - may be attacker-controlled by definition                 |
 
 `isTokenNearExpiry()` is a refresh _hint_ read from an unverified payload, not a gate. Unparseable or no `exp` field means expired.
 
@@ -252,8 +256,8 @@ Three flows past authorization-code-plus-PKCE, documented in full at [docs.wilso
 const { url } = await client.createStepUpRequest(res.headers.get("www-authenticate"));
 await client.verifyIdToken(idToken, { requiredAcr, maxAuthAgeSeconds: 300 });
 
-// Step-up through a back channel, for a client with no redirect URI (this provider only).
-await client.reauthorize(["passkey", "fido"], true, { idTokenHint, openUrl });
+// Step-up through a back channel, for a client with no redirect URI (WilsoonID profile only).
+await client.wilsoon.reauthorize(["passkey", "fido"], true, { idTokenHint, openUrl });
 
 // Device grant (RFC 8628): sign in a CLI with no redirect URI.
 const { user } = await client.authorizeDevice({ onUserCode });
@@ -265,48 +269,53 @@ await machine.fetch("https://api.example.com/reports");
 
 Escalation and the device grant share one polling loop, because the provider answers both with RFC 8628's vocabulary. In both, **the server owns the deadline**: the loop polls until the provider reports `expired_token` rather than timing out on its own clock, since a client-side timer that fires first turns a server-authoritative answer into a guess.
 
-Of the four, only escalation is provider-specific. Step-up is OIDC Core plus RFC 9470, the device grant is RFC 8628 read from discovery, and `client_credentials` is RFC 6749 - all three work against any conforming provider.
+Of the four, only escalation is provider-specific, and it lives in the WilsoonID profile. Step-up is OIDC Core plus RFC 9470, the device grant is RFC 8628 read from discovery, and `client_credentials` is RFC 6749 - all three work against any conforming provider.
 
-## Things that are still specific to one provider
+## Provider profiles
 
-Being honest about what a fork would have to change. Six, and only the first two are likely to matter much.
+Since 3.0 the core is standards-only: nothing in it assumes one provider's claims, cookie
+names or endpoints. Pointing it at another provider is configuration, plus one constant.
 
-### 1. Method escalation is an extension, not a standard
-
-`reauthorize()` and the `/api/escalate` endpoints behind it exist only on this provider. There is no OIDC or RFC equivalent and nothing to discover, so a fork pointing elsewhere finds no endpoint to call.
-
-Nothing else depends on it. [Step-up](https://docs.wilsoon.dev/node-oidc-kit/flows/step-up) covers the same ground portably with `acr_values` and `max_age`, and is what a fork should use.
-
-### 2. Roles are a closed set
+### 1. Roles and permissions are wherever your provider puts them
 
 ```ts
-// packages/auth-core/src/types.ts
-export type UserRole = "admin" | "user";
-export const USER_ROLES: readonly UserRole[] = ["admin", "user"];
+new AuthClient({ ...config, rolesClaim: "resource_access.my-app.roles", permissionsClaim: "permissions" });
 ```
 
-Building `id.wilsoon.dev` meant that I only needed `admin` (myself) and `user`.<br />
-This means that any `role` claim outside of that set will throw `ClaimValidationError` (to prevent potential privilege escalation issues), but it does mean a provider issuing `editor` or `owner` must widen both declarations together. **This is the one change most forks will need**.
+A dot path or a function of the claims. Any value is accepted - there is no fixed set of
+roles - and with no selector configured both lists are empty, so every check fails closed.
+`hasRole()` is any-of, `hasPermission()` is all-of.
 
-(This is not yet configurable at runtime. Making it so - `roles?: readonly string[]` on
-`AuthConfig` - could be a good first contribution if you would like to help, see [Contributing](#contributing).)
-
-### 3. RS256 only
+### 2. RS256 only
 
 `ALLOWED_ALGORITHMS` in `jwt.ts` is `['RS256']`. <br />
 An allowlist is mandatory - without one a verifier can be talked into `alg: "none"` or HMAC confusion - but the contents are a choice. A provider signing with ES256 or EdDSA needs that array widened. I suggest to keep it an allowlist and never derive it from the token header.
 
-### 4. Storage key names
+### 3. Everything that isn't a standard goes in a profile
 
-`STORAGE_KEYS` uses `wilsoon_id_tokens`, `wilsoon_auth_state`, and so on. Cosmetic, and remappable in your adapter without touching the core library.
+Some of what a real provider does is in no spec: an escalation API, shared platform
+sessions, a cookie-based session restore, legacy storage names. Those live in a **provider
+profile**, which core calls through a fixed set of hooks (`mapUser`, `isMachineToken`,
+`restoreSession`, `resolveSharedSession`, `liveAccess`, storage names) and whose own
+functions appear under `client.<name>`:
 
-### 5. One hardcoded logout path
+```ts
+import { createAuthClient } from "@wilsoon/auth-core";
+import { wilsoon } from "@wilsoon/auth-provider-wilsoon";
 
-`AuthProvider`'s `logout()` falls back to `${issuer}/api/logout` when the session was hydrated and there's no `id_token` to use as a hint. Everything else goes through discovery. Against another provider, you'll have to handle that case in your own code.
+const client = createAuthClient({ ...config, profile: wilsoon() });
+await client.wilsoon.reauthorize(["passkey"], true, { idTokenHint, openUrl });
+```
 
-### 6. `hydrateSession()` assumes a cookie-friendly userinfo endpoint
+[`@wilsoon/auth-provider-wilsoon`](https://www.npmjs.com/package/@wilsoon/auth-provider-wilsoon)
+is the profile for `id.wilsoon.dev`, and a complete example: escalation, shared platform
+sessions, `session_version` revocation and permission registration, all built on those
+hooks. See [Pointing it at your own provider](https://docs.wilsoon.dev/node-oidc-kit/core-concepts/your-own-provider)
+to write your own with `defineProfile()`.
 
-It calls userinfo with `credentials: 'include'` and no `Authorization` header, so the provider must accept a cookie-authenticated request and send CORS credentials headers for your origin. Providers that only accept bearer tokens won't support it - use a server-side session read instead.
+Profiles for other providers live in
+[wilsoon-auth-providers](https://github.com/Wilsoon7721/wilsoon-auth-providers), one package
+per provider. Look there before writing your own, and send new ones there rather than here.
 
 ## Contributing
 
@@ -317,12 +326,12 @@ Contributions are welcome, including forks that take this somewhere I wouldn't. 
 ```bash
 pnpm install
 pnpm build
-pnpm test       # vitest - 145 tests across the three packages
+pnpm test       # vitest, across all four packages
 pnpm lint
 pnpm typecheck
 ```
 
-Node 18+ and pnpm 9. The test suite runs against a fake in-process IdP (`packages/auth-core/test/fake-idp.ts`) that mints real RS256-signed tokens, so verification paths are tested for real rather than mocked - including the failure cases (wrong `aud`, wrong `iss`, `alg: none`, expired, replayed nonce). Add to it rather than mocking `jose`.
+Node 18+ and pnpm 11. The test suite runs against a fake in-process IdP (`packages/auth-core/test/fake-idp.ts`) that mints real RS256-signed tokens, so verification paths are tested for real rather than mocked - including the failure cases (wrong `aud`, wrong `iss`, `alg: none`, expired, replayed nonce). Add to it rather than mocking `jose`.
 
 ### Documentation
 
@@ -340,10 +349,12 @@ Both work with no setup. **Publishing does not**: `docs push` needs a `DOCS_SYNC
 ```
 packages/
   auth-core/    index.ts (AuthClient) · jwt.ts (verification) · storage.ts · types.ts · errors.ts
-                amr.ts · utils.ts (PKCE, crypto)
+                profile.ts (provider profiles) · claims.ts (roles, permissions) · amr.ts
+                challenge.ts (step-up) · device.ts · escalation.ts · utils.ts (PKCE, crypto)
   auth-react/   AuthProvider, useAuth
   auth-next/    middleware · server (getSession/requireSession) · ServerCookieStorage
                 resolve.ts (shared routing) · client-cache.ts (JWKS reuse)
+  auth-machine/ client_credentials tokens, standalone
 ```
 
 ### House Rules
@@ -354,18 +365,17 @@ These are what the existing code follows; matching them makes review quick.
   introspection endpoint, an unparseable token - the answer should be a hard **no**.
 - **Anything unverified is named `*Unsafe`,** and its return type must not carry a field that looks authoritative.
 - **Comment the why, not the what.** The codebase is light on JSDoc that restates a method name, and heavy on comments explaining a non-obvious decision: why `new.target` in the error base class, why the refresh is single-flight, why the JWKS cache self-invalidates once. If a future reader would ask "why is it like this?", you could answer it. Lint enforces this at the surface a reader meets first - every exported class and function needs a doc comment - and deliberately not on individual methods, so it never demands a comment that would only restate a name.
-- **Don't remove public API.** Deprecate it: a `@deprecated` tag explaining the replacement,
-  a one-time runtime warning via `warnOnce`, and the old behaviour intact. Real apps depend
-  on these packages.
-- **New provider-specific behaviour needs a config option,** not a hardcoded value - and an
-  entry in [the list above](#things-that-are-still-specific-to-one-provider) if it can't be.
+- **Don't remove public API outside a major.** Deprecate it: a `@deprecated` tag explaining
+  the replacement, a one-time runtime warning via `warnOnce`, and the old behaviour intact
+  until the next major. Real apps depend on these packages.
+- **New provider-specific behaviour belongs in a [provider profile](#provider-profiles),** not
+  in core.
 
 ### Good first issues
 
-- Make `UserRole` configurable (`roles?: readonly string[]` on `AuthConfig`), preserving the fail-closed narrowing.
 - Make `ALLOWED_ALGORITHMS` configurable, still as an allowlist.
 - Storage adapters for SvelteKit, Remix, Hono, Express - ideally as their own packages, with a link from here.
-- Broaden `hydrateSession()` so a bearer-only provider can use it.
+- Provider profiles for other providers (Auth0, Keycloak, Entra ID), in [wilsoon-auth-providers](https://github.com/Wilsoon7721/wilsoon-auth-providers).
 
 Open an issue before a large change so we can discuss a little first. For a suspected security vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening a public issue - it explains what's in scope and how to reach me privately.
 

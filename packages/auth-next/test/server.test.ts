@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { AuthError, STORAGE_KEYS, type AuthConfig } from '@wilsoon/auth-core';
+import { AuthError, DEFAULT_STORAGE_KEYS as STORAGE_KEYS, type AuthConfig } from '@wilsoon/auth-core';
+import { sharedSessions } from './shared-profile';
 import { API_AUDIENCE, CLIENT_ID, OTHER_CLIENT_ID, startFakeIdp, unsignedToken, type FakeIdp } from '../../auth-core/test/fake-idp';
 
 /** A stand-in for the Next.js cookie store, shared with the mocked `next/headers`. */
@@ -30,6 +31,7 @@ const config = (): AuthConfig => ({
     clientId: CLIENT_ID,
     issuer: idp.issuer,
     redirectUri: 'http://localhost:3000/callback',
+    rolesClaim: 'role',
 });
 
 const setSessionCookie = (value: unknown, encode = false) => {
@@ -58,7 +60,7 @@ describe('getSession', () => {
 
         expect(error).toBeUndefined();
         expect(tokens?.id_token).toBeTruthy();
-        expect(user).toMatchObject({ id: 'user-1', role: 'admin', authMethods: ['mfa', 'fido', 'hw'], sessionVersion: 3 });
+        expect(user).toMatchObject({ id: 'user-1', roles: ['admin'], authMethods: ['mfa', 'fido', 'hw'] });
     });
 
     it('reads the URI-encoded cookie the identity provider actually writes', async () => {
@@ -66,7 +68,7 @@ describe('getSession', () => {
 
         const { user } = await getSession(config());
 
-        expect(user?.role).toBe('admin');
+        expect(user?.roles).toEqual(['admin']);
     });
 
     it('returns no session when there is no cookie', async () => {
@@ -153,6 +155,8 @@ describe('getSession on a shared platform cookie', () => {
         issuer: idp.issuer,
         redirectUri: 'https://dash.wilsoon.dev/callback',
         apiAudience: API_AUDIENCE,
+        rolesClaim: 'role',
+        profile: sharedSessions,
     });
 
     const platformIntrospection = () => idp.setIntrospection({
@@ -175,7 +179,7 @@ describe('getSession on a shared platform cookie', () => {
         const { user, error } = await getSession(dashConfig());
 
         expect(error).toBeUndefined();
-        expect(user).toMatchObject({ id: 'user-1', role: 'admin', source: 'access_token', name: 'Ada Lovelace' });
+        expect(user).toMatchObject({ id: 'user-1', roles: ['admin'], source: 'access_token', name: 'Ada Lovelace' });
     });
 
     it('prefers its own ID token and skips introspection entirely', async () => {
@@ -212,8 +216,12 @@ describe('getSession on a shared platform cookie', () => {
         expect(error?.code).toBe('FOREIGN_SESSION');
         expect(error?.message).toMatch(/another application/);
 
+        // Shared sessions go through introspection, so without a secret core does not even try.
         const { error: secretless } = await getSession({ ...dashConfig(), clientSecret: undefined });
-        expect(secretless?.code).toBe('INTROSPECTION_UNAVAILABLE');
+        expect(secretless?.code).toBe('FOREIGN_SESSION');
+
+        const { error: profileless } = await getSession({ ...dashConfig(), profile: undefined });
+        expect(profileless?.code).toBe('FOREIGN_SESSION');
     });
 });
 
@@ -233,7 +241,15 @@ describe('requireSession', () => {
     it('throws when the role is not permitted', async () => {
         setSessionCookie({ access_token: 'a', id_token: await idp.mintIdToken({ role: 'user' }) });
 
-        await expect(requireSession(config(), { roles: ['admin'] })).rejects.toThrow(/not permitted/);
+        await expect(requireSession(config(), { roles: ['admin'] })).rejects.toThrow(/roles \[admin\] is required/);
+    });
+
+    it('requires every listed permission, read from the session access token', async () => {
+        const configured = { ...config(), apiAudience: API_AUDIENCE, permissionsClaim: 'permissions' };
+        setSessionCookie({ access_token: await idp.mintAccessToken({ permissions: ['games_portal.access'] }), id_token: await idp.mintIdToken() });
+
+        await expect(requireSession(configured, { permissions: ['games_portal.access'] })).resolves.toMatchObject({ permissions: ['games_portal.access'] });
+        await expect(requireSession(configured, { permissions: ['games_portal.access', 'games_portal.admin'] })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     });
 
     it('throws when the authentication methods are insufficient', async () => {

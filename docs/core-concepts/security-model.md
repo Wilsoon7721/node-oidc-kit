@@ -4,22 +4,22 @@ identifier: security-model
 order: 2
 ---
 
-One rule governs the whole library: **only five methods produce a value you may authorize on.**
+One rule governs the whole library: **only a handful of methods produce a value you may authorize on.**
 
 | Method                                    | Verified?                                      | Gives you                                                              |
 | ----------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------- |
-| `verifyIdToken()`                         | Signature, `iss`, `aud`, `exp`, `nonce`, `evt` | `AuthenticatedUser` - `role`, `authMethods`, `sessionVersion`          |
-| `verifyAccessToken()`                     | Signature, `iss`, pinned `aud`, `exp`, scopes  | `AccessTokenClaims` - no role, plus `tokenUse`                         |
-| `verifyPlatformSession()`                 | The above, plus live introspection             | `AuthenticatedUser` with **current** role and session version          |
-| `verifyMachineToken()`                    | The access token checks, plus `token_use`      | `MachineClient` - a `clientId`, and deliberately no user fields        |
-| `verifyEscalationToken()`                 | Signature, `iss`, `aud`, `exp`, `evt`          | `VerifiedEscalation` - proof one step-up happened                      |
-| `getUser()` / `hydrateSession()`          | Transport only                                 | `ProfileUser` - display claims, deliberately no `role` field to misuse |
-| `decodeIdTokenUnsafe()`, `parseIdToken()` | **Nothing**                                    | `UnverifiedUser` - attacker-controlled by definition                   |
+| `verifyIdToken()`                         | Signature, `iss`, `aud`, `exp`, `nonce`, `evt` | `AuthenticatedUser` - `roles`, `permissions`, `authMethods`            |
+| `verifyAccessToken()`                     | Signature, `iss`, pinned `aud`, `exp`, scopes  | `AccessTokenClaims` - `roles`, `permissions`, `tokenUse`               |
+| `wilsoon.verifyPlatformSession()`         | The above, plus live introspection             | `AuthenticatedUser` with **current** permissions (WilsoonID profile)   |
+| `verifyMachineToken()`                    | The access token checks, plus machine detection | `MachineClient` - a `clientId`, and deliberately no user fields       |
+| `wilsoon.verifyEscalationToken()`         | Signature, `iss`, `aud`, `exp`, `evt`          | `VerifiedEscalation` - proof one step-up happened (WilsoonID profile)  |
+| `getUser()`, a profile's restore          | Transport only                                 | `ProfileUser` - display claims, deliberately no `roles` to misuse      |
+| `decodeIdTokenUnsafe()`                   | **Nothing**                                    | `UnverifiedUser` - attacker-controlled by definition                   |
 
 `isTokenNearExpiry()` is a refresh _hint_ read from an unverified payload, not a gate. It fails closed: unparseable, or no `exp` claim, means "expired."
 
 {% callout type="danger" title="Anyone can mint a token with role: admin" %}
-`decodeIdTokenUnsafe()` and the deprecated `parseIdToken()` read a JWT's payload without checking its signature. A JWT is just base64 - anyone can construct one with any claims and an empty or garbage signature. Reading `role` off an unverified decode is a key issue that v2.x closed.
+`decodeIdTokenUnsafe()` reads a JWT's payload without checking its signature. A JWT is just base64 - anyone can construct one with any claims and an empty or garbage signature. Reading `roles` or `permissions` off an unverified decode is exactly the bug the verified methods exist to prevent.
 {% /callout %}
 
 ## The request is not the guarantee
@@ -31,7 +31,7 @@ Correct signature, correct issuer, correct audience, not expired. Nothing to cat
 | You asked for                           | The claim that answers               | If you skip it                                                                |
 | --------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------- |
 | `acr_values` / `max_age` on the request | `acr`, `auth_time`                   | A provider that ignored you produces a step-up that appears to have succeeded |
-| A user, at a user-facing endpoint       | `token_use`, or `sub` vs `client_id` | A machine's `client_id` is read as a person                                   |
+| A user, at a user-facing endpoint       | `sub` vs `client_id`, or the profile's marker | A machine's `client_id` is read as a person                                   |
 | Proof a user is signed in               | `evt`                                | A proof that one action was authorised passes as a login                      |
 
 Each of these is checked for you, but only where the library can know what you meant.
@@ -57,19 +57,19 @@ Each check below exists because without it one would verify cleanly as another.
 
 | Kind             | Marked by                | Refused where                              |
 | ---------------- | ------------------------ | ------------------------------------------ |
-| ID token         | no `evt`, no `token_use` | -                                          |
+| ID token         | no `evt`, not a machine token | -                                     |
 | Escalation proof | `evt: "escalation"`      | `verifyIdToken()` refuses any `evt` at all |
-| Machine token    | `token_use: "client"`    | every user path, unless opted into         |
+| Machine token    | `sub === client_id`, or a profile marker | every user path, unless opted into |
 
-A **machine token**'s `sub` is a `client_id`, not a person, so `verifyAccessToken()` refuses one by default and `verifyMachineToken()` returns a type with no `id`, `role` or `authMethods` on it to misread.
-Two signals identify one: the reference provider's `token_use: "client"`, and an RFC 9068 `sub` equal to `client_id`, which holds on any provider following that profile. Set `detectMachineToken` on `AuthConfig` for a provider that marks them some other way. `verifyPlatformSession()`, `resolveSession()` and `isSessionCurrent()` refuse outright, with no opt-in - there is no user to resolve a session for. See [Machine tokens](/flows/machine-tokens).
+A **machine token**'s `sub` is a `client_id`, not a person, so `verifyAccessToken()` refuses one by default and `verifyMachineToken()` returns a type with no `id`, `roles` or `authMethods` on it to misread.
+Without a profile, core recognises one by RFC 9068's `sub` equal to `client_id`, which holds on any provider following that profile. A provider profile can add its own marker (WilsoonID's is `token_use: "client"`), and `detectMachineToken` on `AuthConfig` overrides both. `resolveSession()` and a profile's session checks refuse outright, with no opt-in - there is no user to resolve a session for. See [Machine tokens](/flows/machine-tokens).
 
-An **escalation token** asserts that one step-up happened, not that a user is signed in. The check runs both ways: `verifyEscalationToken()` requires `evt: "escalation"`, and `verifyIdToken()` refuses any token carrying an `evt`. See [Method escalation](/flows/escalation).
+An **escalation token** asserts that one step-up happened, not that a user is signed in. The check runs both ways: the WilsoonID profile's `verifyEscalationToken()` requires `evt: "escalation"`, and `verifyIdToken()` refuses any token carrying an `evt`. See [Method escalation](/flows/escalation).
 
 ## The type system enforces it, not just the docs
 
-`ProfileUser` - what `getUser()` and `hydrateSession()` return - has no `role` field at
-all. Authorizing on a userinfo response is a compile error, not a runtime `undefined` you
+`ProfileUser` - what `getUser()` and a profile's cookie restore return - has no `roles` or
+`permissions` at all. Authorizing on a userinfo response is a compile error, not a runtime `undefined` you
 might not notice.
 
 `@wilsoon/auth-react`'s `SessionUser` is a discriminated union on `verified`:
@@ -86,13 +86,13 @@ user?.name;
 user?.email;
 
 // Only after a verified callback exchange:
-if (user?.verified && user.role === "admin") {
+if (user?.verified && hasRole(user, "admin")) {
   return <AdminNav />;
 }
 ```
 
-TypeScript won't let you read `role` without narrowing on `verified` first, so a hydrated
-session can't silently produce `undefined` where a role was expected.
+TypeScript won't let you read `roles` without narrowing on `verified` first, so a session
+restored from a cookie can't silently produce an empty list where roles were expected.
 
 {% callout type="warning" title="Client-side checks are for rendering" %}
 A browser can be told anything. Whatever `AuthProvider` / `useAuth()` report is for
@@ -101,15 +101,17 @@ deciding what to _show_, never what to _allow_. Gate real access on the server -
 `verifyAccessToken()` directly in your API.
 {% /callout %}
 
-## Roles are validated, not asserted
+## Roles are data, not a type
 
-A `role` claim is narrowed against a closed set (`'admin' | 'user'` by default) rather than
-cast. An unrecognised value throws `ClaimValidationError` instead of being silently mapped
-onto a known role - the failure mode a privilege-escalation bug usually takes. An absent
-`role` falls back to the least-privileged `'user'`.
+`roles` and `permissions` are plain string arrays, read from verified claims through
+`rolesClaim` / `permissionsClaim` or a provider profile. There is no closed set: an unknown
+role lands in `roles` and matches only a `hasRole()` check that names it. Nothing is guessed
+either - with no selector configured both lists are empty, so a check fails closed rather than
+passing on a claim nobody mapped. See [Authorization](/recipes/authorization).
 
-A provider that issues other roles needs that set widened at the source - see
-[Pointing it at your own provider](/core-concepts/your-own-provider).
+The deprecated `role` field, set only by the WilsoonID profile for 2.x apps, keeps its old
+`'admin' | 'user'` narrowing: any other value leaves it unset rather than mapping onto a known
+role.
 
 ## Every unverified method is named `*Unsafe`
 

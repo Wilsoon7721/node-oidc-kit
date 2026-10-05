@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AMR, assertAmr, AuthClient, AuthError, AuthorizationResponseError, ClaimValidationError, MemoryStorage, NonceMismatchError, NoTokenError, satisfiesAmr, SessionCheckUnavailableError, StateMismatchError, STORAGE_KEYS, StorageUnavailableError, TokenRefreshError, TokenVerificationError, UserInfoError, generateCodeChallenge, type AuthConfig } from "../src/index";
+import { AMR, assertAmr, AuthClient, AuthError, AuthorizationResponseError, ClaimValidationError, MemoryStorage, NonceMismatchError, NoTokenError, satisfiesAmr, StateMismatchError, DEFAULT_STORAGE_KEYS, StorageUnavailableError, TokenRefreshError, TokenVerificationError, UserInfoError, generateCodeChallenge, type AuthConfig } from "../src/index";
 import { API_AUDIENCE, CLIENT_ID, OTHER_CLIENT_ID, attackerKeys, startFakeIdp, unsignedToken, type FakeIdp } from "./fake-idp";
 
 let idp: FakeIdp;
@@ -51,9 +51,9 @@ describe("createAuthorizeUrl", () => {
     const { client, storage } = withStorage();
     const request = await client.createAuthorizeUrl();
 
-    expect(storage.getItem(STORAGE_KEYS.state)).toBe(request.state);
-    expect(storage.getItem(STORAGE_KEYS.nonce)).toBe(request.nonce);
-    expect(storage.getItem(STORAGE_KEYS.codeVerifier)).toBe(request.codeVerifier);
+    expect(storage.getItem(DEFAULT_STORAGE_KEYS.state)).toBe(request.state);
+    expect(storage.getItem(DEFAULT_STORAGE_KEYS.nonce)).toBe(request.nonce);
+    expect(storage.getItem(DEFAULT_STORAGE_KEYS.codeVerifier)).toBe(request.codeVerifier);
   });
 
   it("passes through prompt, acr_values and login_hint", async () => {
@@ -126,7 +126,8 @@ describe("handleCallback", () => {
 
     const result = await client.handleCallback(`http://localhost:3000/callback?code=the-code&state=${request.state}`);
 
-    expect(result.user?.role).toBe("admin");
+    expect(result.user?.id).toBe("user-1");
+    expect(result.user?.roles).toEqual([]);
     expect(result.user?.authMethods).toContain(AMR.FIDO);
     expect(result.state).toBe(request.state);
     expect(result.tokens.access_token).toBeTruthy();
@@ -137,9 +138,9 @@ describe("handleCallback", () => {
     expect(sent.get("code_verifier")).toBe(request.codeVerifier);
 
     // Single-use values are cleared so the callback cannot be replayed.
-    expect(storage.getItem(STORAGE_KEYS.state)).toBeNull();
-    expect(storage.getItem(STORAGE_KEYS.nonce)).toBeNull();
-    expect(storage.getItem(STORAGE_KEYS.codeVerifier)).toBeNull();
+    expect(storage.getItem(DEFAULT_STORAGE_KEYS.state)).toBeNull();
+    expect(storage.getItem(DEFAULT_STORAGE_KEYS.nonce)).toBeNull();
+    expect(storage.getItem(DEFAULT_STORAGE_KEYS.codeVerifier)).toBeNull();
   });
 
   it("rejects a mismatched state without touching the token endpoint", async () => {
@@ -170,7 +171,7 @@ describe("handleCallback", () => {
     const { client, storage, request } = await startFlow();
 
     await expect(client.handleCallback(`http://localhost:3000/callback?error=access_denied&error_description=User+said+no&state=${request.state}`)).rejects.toThrow(AuthorizationResponseError);
-    expect(storage.getItem(STORAGE_KEYS.state)).toBeNull();
+    expect(storage.getItem(DEFAULT_STORAGE_KEYS.state)).toBeNull();
   });
 
   it("requires an authorization code", async () => {
@@ -225,7 +226,7 @@ describe("handleCallback", () => {
     await client.handleCallback(`http://localhost:3000/callback?code=c&state=${request.state}`, { persistTokens: true });
 
     expect(client.getStoredTokens()?.refresh_token).toBe("rotated-refresh-token");
-    expect(storage.getItem(STORAGE_KEYS.tokens)).toBeTruthy();
+    expect(storage.getItem(DEFAULT_STORAGE_KEYS.tokens)).toBeTruthy();
   });
 
   it("accepts URLSearchParams as well as a URL", async () => {
@@ -272,7 +273,7 @@ describe("refreshAccessToken", () => {
 
     await client.refreshAccessToken("rt-1");
 
-    expect(storage.getItem(STORAGE_KEYS.tokens)).toBeNull();
+    expect(storage.getItem(DEFAULT_STORAGE_KEYS.tokens)).toBeNull();
   });
 
   it("reports refresh failures and requires a token", async () => {
@@ -298,13 +299,9 @@ describe("refreshAccessToken", () => {
 describe("expiry hints", () => {
   it("treats a token with no exp claim as expired rather than valid forever", async () => {
     const { client } = withStorage();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const eternal = unsignedToken({ sub: "user-1", role: "admin" });
     expect(client.isTokenNearExpiry(eternal)).toBe(true);
-    expect(client.isTokenExpired(eternal)).toBe(true);
-
-    warn.mockRestore();
   });
 
   it("treats an unparseable token as expired", () => {
@@ -342,12 +339,12 @@ describe("storage handling", () => {
     expect(client.getStoredTokens()).toEqual({ access_token: "a", refresh_token: "r" });
 
     client.clearStorage();
-    expect(storage.getItem(STORAGE_KEYS.tokens)).toBeNull();
+    expect(storage.getItem(DEFAULT_STORAGE_KEYS.tokens)).toBeNull();
   });
 
   it("reads the URI-encoded cookie form the identity provider writes", () => {
     const { client, storage } = withStorage();
-    storage.setItem(STORAGE_KEYS.tokens, encodeURIComponent(JSON.stringify({ access_token: "a", id_token: "b" })));
+    storage.setItem(DEFAULT_STORAGE_KEYS.tokens, encodeURIComponent(JSON.stringify({ access_token: "a", id_token: "b" })));
 
     expect(client.getStoredTokens()).toEqual({ access_token: "a", id_token: "b" });
   });
@@ -355,10 +352,10 @@ describe("storage handling", () => {
   it("returns null for junk in storage rather than throwing", () => {
     const { client, storage } = withStorage();
 
-    storage.setItem(STORAGE_KEYS.tokens, "not json");
+    storage.setItem(DEFAULT_STORAGE_KEYS.tokens, "not json");
     expect(client.getStoredTokens()).toBeNull();
 
-    storage.setItem(STORAGE_KEYS.tokens, JSON.stringify({ nothing: true }));
+    storage.setItem(DEFAULT_STORAGE_KEYS.tokens, JSON.stringify({ nothing: true }));
     expect(client.getStoredTokens()).toBeNull();
   });
 });
@@ -393,39 +390,6 @@ describe("profile fetching", () => {
     await expect(client.getUser(await idp.mintAccessToken())).rejects.toThrow(ClaimValidationError);
 
     idp.setUserinfo({ sub: "user-1", name: "Ada Lovelace", email: "ada@example.com", email_verified: true }, 200);
-  });
-});
-
-describe("session_version enforcement", () => {
-  const verified = async (client: AuthClient, sessionVersion?: number) => client.verifyIdToken(await idp.mintIdToken({ session_version: sessionVersion }));
-
-  it("fails closed when no resolver is configured", async () => {
-    const { client } = withStorage();
-    const user = await verified(client, 3);
-
-    await expect(client.isSessionCurrent(user)).rejects.toThrow(SessionCheckUnavailableError);
-  });
-
-  it("compares the token version against the live version", async () => {
-    const current = { value: 3 as number | null };
-    const { client } = withStorage({ resolveSessionVersion: () => current.value });
-    const user = await verified(client, 3);
-
-    await expect(client.isSessionCurrent(user)).resolves.toBe(true);
-
-    current.value = 4; // the user revoked all sessions
-    await expect(client.isSessionCurrent(user)).resolves.toBe(false);
-
-    current.value = null;
-    await expect(client.isSessionCurrent(user)).rejects.toThrow(SessionCheckUnavailableError);
-  });
-
-  it("fails closed when the token asserts no version", async () => {
-    const { client } = withStorage({ resolveSessionVersion: () => 3 });
-    const user = await verified(client, undefined);
-
-    expect(user.sessionVersion).toBeUndefined();
-    await expect(client.isSessionCurrent(user)).rejects.toThrow(SessionCheckUnavailableError);
   });
 });
 
@@ -474,173 +438,6 @@ describe("introspection", () => {
 
     idp.setIntrospection({ active: true, sub: "user-1", role: "admin", session_version: 3 });
   });
-
-  it("enforces session_version through introspection when no resolver is configured", async () => {
-    const client = confidential();
-    const token = await idp.mintIdToken({ session_version: 3 });
-    const user = await client.verifyIdToken(token);
-
-    idp.setIntrospection({ active: true, sub: "user-1", session_version: 3 });
-    await expect(client.isSessionCurrent(user, { token })).resolves.toBe(true);
-
-    idp.setIntrospection({ active: true, sub: "user-1", session_version: 4 });
-    await expect(client.isSessionCurrent(user, { token })).resolves.toBe(false);
-
-    // The provider itself refuses a token from a superseded session.
-    idp.setIntrospection({ active: false });
-    await expect(client.isSessionCurrent(user, { token })).resolves.toBe(false);
-
-    idp.setIntrospection({ active: true, sub: "user-1", session_version: 3 });
-  });
-
-  it("prefers a configured resolver over introspection", async () => {
-    const client = new AuthClient(config({ clientSecret: "shh", resolveSessionVersion: () => 9 }), new MemoryStorage());
-    const token = await idp.mintIdToken({ session_version: 3 });
-    const user = await client.verifyIdToken(token);
-    const before = idp.introspectionRequests.length;
-
-    await expect(client.isSessionCurrent(user, { token })).resolves.toBe(false);
-    expect(idp.introspectionRequests.length).toBe(before);
-  });
-
-  it("fails closed when introspection cannot answer", async () => {
-    const client = confidential();
-    const token = await idp.mintIdToken({ session_version: 3 });
-    const user = await client.verifyIdToken(token);
-
-    idp.setIntrospection({ active: true, sub: "user-1" });
-    await expect(client.isSessionCurrent(user, { token })).rejects.toThrow(SessionCheckUnavailableError);
-
-    idp.setIntrospection({ active: true, sub: "user-1", role: "admin", session_version: 3 });
-  });
-});
-
-describe("platform sessions (shared cookie across services)", () => {
-  /** A sibling first-party service: different client_id, same platform access token. */
-  const sibling = (overrides: Partial<AuthConfig> = {}) => new AuthClient(config({ clientId: "dash-service", clientSecret: "shh", ...overrides }), new MemoryStorage());
-
-  const platformIntrospection = (extra: Record<string, unknown> = {}) =>
-    idp.setIntrospection({
-      active: true,
-      sub: "user-1",
-      role: "admin",
-      amr: ["mfa", "fido", "hw"],
-      session_version: 3,
-      name: "Ada Lovelace",
-      email: "ada@example.com",
-      email_verified: true,
-      auth_time: Math.floor(Date.now() / 1000),
-      ...extra,
-    });
-
-  it("resolves a verified user from an access token minted for another service", async () => {
-    platformIntrospection();
-    // The token was issued to `go-service`; `dash-service` receives it via the shared cookie.
-    const accessToken = await idp.mintAccessToken({ client_id: "go-service" });
-
-    const user = await sibling().verifyPlatformSession(accessToken);
-
-    expect(user.id).toBe("user-1");
-    expect(user.role).toBe("admin");
-    expect(user.authMethods).toEqual(["mfa", "fido", "hw"]);
-    expect(user.sessionVersion).toBe(3);
-    expect(user.name).toBe("Ada Lovelace");
-    expect(user.email).toBe("ada@example.com");
-    expect(user.source).toBe("access_token");
-    expect(user.audience).toBe(API_AUDIENCE);
-  });
-
-  it("marks an ID-token identity with its own source", async () => {
-    const user = await sibling({ clientId: CLIENT_ID }).verifyIdToken(await idp.mintIdToken());
-
-    expect(user.source).toBe("id_token");
-  });
-
-  it("refuses a session the provider reports as inactive", async () => {
-    idp.setIntrospection({ active: false });
-
-    await expect(sibling().verifyPlatformSession(await idp.mintAccessToken())).rejects.toThrow(/no longer active/);
-  });
-
-  it("still rejects a token that fails cryptographic verification", async () => {
-    platformIntrospection();
-    const { privateKey } = await attackerKeys();
-
-    await expect(sibling().verifyPlatformSession(await idp.mintAccessToken({}, { key: privateKey }))).rejects.toThrow(TokenVerificationError);
-    await expect(sibling().verifyPlatformSession(await idp.mintAccessToken({}, { expiresInSeconds: -60 }))).rejects.toThrow(TokenVerificationError);
-  });
-
-  it("rejects an audience that is not the platform API", async () => {
-    platformIntrospection();
-    const other = await idp.mintAccessToken({}, { audience: "https://someone-elses-api.example.com" });
-
-    await expect(sibling().verifyPlatformSession(other)).rejects.toThrow(TokenVerificationError);
-  });
-
-  it("refuses when introspection disagrees about the subject", async () => {
-    platformIntrospection({ sub: "somebody-else" });
-
-    await expect(sibling().verifyPlatformSession(await idp.mintAccessToken())).rejects.toThrow(/different subject/);
-  });
-
-  it("requires a confidential client and a pinned audience", async () => {
-    platformIntrospection();
-    const token = await idp.mintAccessToken();
-
-    await expect(sibling({ clientSecret: undefined }).verifyPlatformSession(token)).rejects.toThrow(/clientSecret/);
-    await expect(sibling({ apiAudience: undefined }).verifyPlatformSession(token)).rejects.toThrow(ClaimValidationError);
-  });
-
-  it("validates the live role rather than asserting it", async () => {
-    platformIntrospection({ role: "superuser" });
-
-    await expect(sibling().verifyPlatformSession(await idp.mintAccessToken())).rejects.toThrow(ClaimValidationError);
-  });
-
-  it("caches within the configured window and re-checks after it", async () => {
-    platformIntrospection();
-    const client = sibling({ platformSessionCacheSeconds: 60 });
-    const token = await idp.mintAccessToken();
-    const before = idp.introspectionRequests.length;
-
-    await client.verifyPlatformSession(token);
-    await client.verifyPlatformSession(token);
-    await client.verifyPlatformSession(token);
-    expect(idp.introspectionRequests.length - before).toBe(1);
-
-    // A revocation is picked up once the window passes...
-    idp.setIntrospection({ active: false });
-    await expect(client.verifyPlatformSession(token, { cacheSeconds: 0 })).rejects.toThrow(/no longer active/);
-
-    // ...and `force` bypasses the cache immediately.
-    platformIntrospection();
-    await expect(client.verifyPlatformSession(token, { force: true })).resolves.toBeDefined();
-  });
-
-  it("does not cache when no window is configured", async () => {
-    platformIntrospection();
-    const client = sibling();
-    const token = await idp.mintAccessToken();
-    const before = idp.introspectionRequests.length;
-
-    await client.verifyPlatformSession(token);
-    await client.verifyPlatformSession(token);
-
-    expect(idp.introspectionRequests.length - before).toBe(2);
-  });
-
-  it("never caches past the token expiry", async () => {
-    platformIntrospection();
-    const client = sibling({ platformSessionCacheSeconds: 3600 });
-    const token = await idp.mintAccessToken({}, { expiresInSeconds: 65 });
-    const before = idp.introspectionRequests.length;
-
-    await client.verifyPlatformSession(token);
-    await client.verifyPlatformSession(token);
-
-    // 65s of validity, so the 3600s window is clamped and the entry is still live here.
-    expect(idp.introspectionRequests.length - before).toBe(1);
-  });
 });
 
 describe("resolveSession (framework-agnostic routing)", () => {
@@ -662,31 +459,16 @@ describe("resolveSession (framework-agnostic routing)", () => {
     expect(idp.introspectionRequests.length).toBe(before);
   });
 
-  it("falls back to the platform session for a sibling service cookie", async () => {
-    const user = await dash().resolveSession({
-      id_token: await idp.mintIdToken({}, { audience: "go-service" }),
-      access_token: await idp.mintAccessToken({ client_id: "go-service" }),
-    });
-
-    expect(user.source).toBe("access_token");
-    expect(user.role).toBe("admin");
-  });
-
-  it("uses the access token when there is no ID token at all", async () => {
-    const user = await dash().resolveSession({ access_token: await idp.mintAccessToken() });
-
-    expect(user.source).toBe("access_token");
-  });
-
-  it("explains a foreign session when platform mode is not configured", async () => {
-    const notConfigured = dash({ apiAudience: undefined, clientSecret: undefined });
+  it("explains a foreign session when no profile can resolve shared sessions", async () => {
+    // Standards-only core has no shared-session mechanism, so even a confidential, pinned client refuses.
+    const notConfigured = dash();
 
     await expect(
       notConfigured.resolveSession({
         id_token: await idp.mintIdToken({}, { audience: "go-service" }),
         access_token: await idp.mintAccessToken(),
       }),
-    ).rejects.toThrow(/established by another application/);
+    ).rejects.toMatchObject({ code: "FOREIGN_SESSION" });
   });
 
   it("requires something to verify", async () => {

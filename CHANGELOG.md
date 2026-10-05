@@ -4,6 +4,140 @@ The three original packages (`@wilsoon/auth-core`, `@wilsoon/auth-react`,
 `@wilsoon/auth-next`) are versioned together. `@wilsoon/auth-machine` has no dependency on
 them and is versioned independently, starting at 0.x.
 
+## 3.0.0
+
+The core is now standards-only. Everything specific to one identity provider moved behind a
+**provider profile**, which adapts claims, picks storage names and adds functions that are in
+no spec, namespaced under the profile's name. A provider quirk no longer needs a kit release.
+
+### Migrating
+
+Install the WilsoonID profile, which ships separately from the kit:
+
+```sh
+pnpm add @wilsoon/auth-provider-wilsoon
+```
+
+Then one line per app. Pass your provider's profile, and 2.x behaviour and storage names come back:
+
+```ts
+import { wilsoon } from "@wilsoon/auth-provider-wilsoon";
+
+new AuthClient({ ...config, profile: wilsoon() });        // 2.x behaviour, same storage keys
+const client = createAuthClient({ ...config, profile: wilsoon() });
+await client.wilsoon.reauthorize(["passkey"]);              // typed extensions
+```
+
+Do not annotate the config object as `AuthConfig` if you want `client.wilsoon` typed. The
+annotation widens `profile` and loses its name; spread the profile in last, or use `satisfies`.
+
+The 2.x methods below still work on `AuthClient` when a profile provides them. They warn once
+and forward to the profile, and are removed in 4.0. Without a profile they throw
+`PROFILE_REQUIRED`.
+
+| 2.x | 3.0 |
+|---|---|
+| `client.createEscalation()`, `pollEscalation()`, `reauthorize()`, `verifyEscalationToken()` | `client.wilsoon.*`, or the portable `createStepUpRequest()` / `login({ acrValues, maxAge })` |
+| `client.verifyPlatformSession()` | `client.wilsoon.verifyPlatformSession()`; `resolveSession()` still routes to it |
+| `client.isSessionCurrent()` | `client.wilsoon.isSessionCurrent()`, or `enforce: "live"` in the middleware |
+| `client.hydrateSession()` | `client.silentAuthorize()`; with a profile, `hydrateSession()` forwards to its cookie restore |
+| `user.role === "admin"` | `hasRole(user, "admin")` / `hasPermission(user, "<slug>.<key>")` |
+| `requireSession(config, { roles: ["admin"] })` | `requireSession(config, { permissions: ["<slug>.admin"] })` (`roles` still works, any-of) |
+| `STORAGE_KEYS.tokens` | `client.storageKeys.tokens` |
+| `AuthConfig.cookieDomain` | `cookieDomain` on `createAuthMiddleware` options or `ServerCookieStorage` |
+| `AuthConfig.escalationEndpoint`, `resolveSessionVersion`, `platformSessionCacheSeconds` | the WilsoonID profile's options (still read as fallbacks) |
+
+### Changed - `@wilsoon/auth-core`
+
+- **Storage names default to `oidc_tokens`, `oidc_state`, `oidc_nonce`, `oidc_verifier`.**
+  `storagePrefix` changes the prefix. A profile can set exact names; the WilsoonID profile
+  keeps `wilsoon_id_tokens` and `wilsoon_auth_*`. An app that upgrades without a profile
+  signs its users out once.
+- **`AuthenticatedUser.role` is optional and deprecated.** Users gain `roles`, `permissions`
+  and `sid`; `roles` and `permissions` are empty unless `rolesClaim`, `permissionsClaim` or
+  a profile fills them. `sessionVersion` is deprecated and set only by the WilsoonID profile.
+- **An unrecognised role no longer fails the login.** 2.x threw on any role outside
+  `admin`/`user`. It now lands in `roles` and never maps onto a known `role`.
+- **Machine detection without a profile is RFC 9068 only** (`sub === client_id`). The
+  `token_use: "client"` check moved to the WilsoonID profile. `isMachineToken()` is unchanged.
+- **`resolveSession()` without a profile refuses a sibling client's session** with
+  `FOREIGN_SESSION`. Shared sessions need a profile that resolves them, `apiAudience` and a
+  `clientSecret`.
+- `getLogoutUrl()` accepts no ID token and sends `client_id` instead (RP-Initiated Logout 1.0).
+- Log prefix is `[node-oidc-kit]`.
+
+### Removed - `@wilsoon/auth-core`
+
+Everything deprecated before 3.0:
+
+- `CookieStorage`, a no-op since 1.2.0. Use `silentAuthorize()` in the browser, or a
+  server-side adapter such as `ServerCookieStorage`.
+- `parseIdToken()`. Use `verifyIdToken()`, or `decodeIdTokenUnsafe()` for display only.
+- `isTokenExpired()`. Use `isTokenNearExpiry()`.
+- The `User` type. Use `AuthenticatedUser`.
+
+### Documentation
+
+- `INTEGRATION.md` is gone. Its framework recipes, troubleshooting table and pre-ship checklist
+  moved to a new Recipes chapter on the docs site, rewritten for 3.0. The 1.x migration notes
+  were dropped.
+
+### Added - `@wilsoon/auth-core`
+
+- `ProviderProfile`, `ProfileContext`, `defineProfile()` and `createAuthClient()`, which types
+  the profile's extensions under `client.<name>`.
+- `rolesClaim` / `permissionsClaim` (a dot path or a function), with `hasRole`,
+  `hasPermission`, `requireRole`, `requirePermission`, `readClaimPath`, `readClaimList`. These
+  cover Auth0 (`permissions`), Entra ID (`roles`) and Keycloak (`resource_access.<client>.roles`)
+  with no profile.
+- The session's own access token adds its roles and permissions to the user, in
+  `handleCallback()` and `resolveSession()`. It counts only when it verifies, names this client
+  as `client_id` and has the same subject. WilsoonID carries `permissions` only there.
+- `silentAuthorize()`: session restore through `prompt=none`, in a hidden iframe (default) or a
+  top-level redirect. `isSilentAuthError()` and `SILENT_AUTH_ERRORS` read `login_required` and
+  its siblings as "not signed in".
+- `liveAccess(token)`: whether the provider still honours a token, and the user's permissions
+  right now. Uses the profile's hook, or plain introspection.
+- `handleCallback()` checks an `iss` on the authorization response (RFC 9207), and requires it
+  when discovery advertises `authorization_response_iss_parameter_supported`.
+- `client.storageKeys`, `client.profileName`, `DEFAULT_STORAGE_KEYS`, `storageKeysFor()`.
+- `roles`, `permissions` and `sid` on `AccessTokenClaims`; `permissions` and `sid` on
+  `IntrospectionResponse`.
+
+### Changed - `@wilsoon/auth-react`
+
+- **`AuthProvider` restores sessions with `silentAuthorize()`** and falls back to the profile's
+  restore, such as WilsoonID's cookie, when that finds nothing. `restore="profile"` keeps the
+  2.x behaviour; `restore="none"` turns restore off. The `redirectUri` page must allow being
+  framed by its own origin.
+- Rendered inside the silent-sign-in iframe, `AuthProvider` does nothing, so the parent finishes
+  the exchange.
+- Logout without an ID token uses the discovered `end_session_endpoint` with `client_id`,
+  instead of a hardcoded `/api/logout`.
+
+### Added - `@wilsoon/auth-react`
+
+- `profile`, `rolesClaim`, `permissionsClaim`, `storagePrefix`, `restore` and `silentTimeoutMs`
+  props.
+- `useAuth()` exposes `client` and the profile's extensions under its name;
+  `useAuth<typeof profile>()` types them.
+
+### Changed - `@wilsoon/auth-next`
+
+- The default session cookie name is the client's `storageKeys.tokens`. With the WilsoonID
+  profile that is still `wilsoon_id_tokens`.
+- `roles` on the middleware and `requireSession()` is `string[]`, matched with `hasRole` (any-of).
+- `ServerCookieStorage` treats a key ending in `tokens` as the long-lived token cookie, so any
+  prefix works. Pass `storageKeys` for a name that does not.
+
+### Added - `@wilsoon/auth-next`
+
+- `permissions` (all-of) on the middleware and `requireSession()`.
+- `enforce: "live"` on the middleware. It asks the provider on every request, signs the user out
+  when the session is gone, and guards `permissions` on what the user holds now. If the provider
+  cannot be asked it answers 503 and keeps the cookie, so an outage signs nobody out.
+- The client cache keys on the profile and claim selectors, so define them once at module level.
+
 ## 2.3.0
 
 One fix, in the Next.js middleware: it was ending the sessions it was meant to be keeping.
