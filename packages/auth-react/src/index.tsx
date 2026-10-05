@@ -1,39 +1,45 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState, useMemo, useRef } from "react";
-import { AuthClient, BrowserStorage, TokenResponse } from "@wilsoon/auth-core";
-import { AuthState, LoginOptions, SessionUser } from "./types";
+import { AuthClient, AuthConfig, BrowserStorage, ProfileExtensions, ProviderProfile, TokenResponse } from "@wilsoon/auth-core";
+import { AuthState, LoginOptions, SessionRestore, SessionUser } from "./types";
 
 const AuthContext = createContext<AuthState | null>(null);
 
-/**
- * Provider component that handles authentication state for the application.
- * It manages the login redirect, the callback exchange, session hydration via HttpOnly
- * cookies, and logout.
- *
- * On the OIDC callback the provider calls `AuthClient.handleCallback()`, which validates
- * `state`, exchanges the code with its PKCE verifier and **verifies the returned ID token**
- * against the identity provider's published keys. The resulting user is marked
- * `verified: true`, and only then does it carry `role`, `authMethods` and `sessionVersion`.
- *
- * On a normal page load the provider hydrates from the HttpOnly session cookie by calling
- * the userinfo endpoint with `credentials: 'include'`. That endpoint returns profile claims
- * only, so the hydrated user is marked `verified: false` and carries no authorization
- * fields. Check `user.verified` before reading them.
- *
- * No refresh here. The session cookie is `HttpOnly`, so this provider cannot see the refresh token.
- * Instead, SPAs should react reactively (on 401s) and Next.js can utilise a middleware instead.
- */
-export const AuthProvider: React.FC<{
+/** Props for {@link AuthProvider}. */
+export interface AuthProviderProps {
   clientId: string;
   issuer: string;
   redirectUri: string;
   scope?: string[];
+  /** @deprecated Since 3.0.0 - the provider writes no cookies; this prop is ignored. */
   cookieDomain?: string;
+  /** The provider profile, e.g. `wilsoon()`. Its extensions are exposed on `useAuth()` under its name. */
+  profile?: ProviderProfile<string, object>;
+  /** Where roles live in the ID token, as on `AuthConfig`. */
+  rolesClaim?: AuthConfig["rolesClaim"];
+  /** Where permissions live in the ID token, as on `AuthConfig`. */
+  permissionsClaim?: AuthConfig["permissionsClaim"];
+  /** Storage name prefix, as on `AuthConfig`. */
+  storagePrefix?: string;
+  /** How a page load restores the session (default `"silent"`). */
+  restore?: SessionRestore;
+  /** How long the silent attempt may take, in ms (default 10000). */
+  silentTimeoutMs?: number;
   children: React.ReactNode;
-}> = ({ clientId, issuer, redirectUri, scope, cookieDomain, children }) => {
+}
+
+/**
+ * Provider component that handles authentication state for the application: the login redirect, the callback exchange, session restore and logout.
+ *
+ * On the OIDC callback, and after a silent restore, the ID token has been verified, so the user is marked `verified: true`.
+ * A profile's non-standard restore (such as a provider cookie) yields display claims only, marked `verified: false`.
+ *
+ * No refresh here: a silent restore on the next page load renews the session. Next.js apps should keep tokens server-side and use the middleware instead.
+ */
+export const AuthProvider: React.FC<AuthProviderProps> = ({ clientId, issuer, redirectUri, scope, profile, rolesClaim, permissionsClaim, storagePrefix, restore = "silent", silentTimeoutMs, children }) => {
   const scopeKey = scope ? scope.join(" ") : "";
-  const config = useMemo(() => ({ clientId, issuer, redirectUri, cookieDomain, scope: scopeKey ? scopeKey.split(" ") : undefined }), [clientId, issuer, redirectUri, cookieDomain, scopeKey]);
+  const config = useMemo<AuthConfig>(() => ({ clientId, issuer, redirectUri, scope: scopeKey ? scopeKey.split(" ") : undefined, profile, rolesClaim, permissionsClaim, storagePrefix }), [clientId, issuer, redirectUri, scopeKey, profile, rolesClaim, permissionsClaim, storagePrefix]);
 
   // sessionStorage, not localStorage: `state`, `nonce` and the PKCE verifier are single-use
   // values scoped to one login attempt in one tab.
@@ -50,6 +56,12 @@ export const AuthProvider: React.FC<{
       if (processingRef.current) return;
       processingRef.current = true;
 
+      // Inside the silent sign-in iframe this page is only a landing spot: the parent reads the URL and finishes the exchange.
+      if (window.parent !== window) {
+        setIsLoading(false);
+        return;
+      }
+
       const params = new URLSearchParams(window.location.search);
       const isCallback = params.has("code") || params.has("error");
 
@@ -63,9 +75,16 @@ export const AuthProvider: React.FC<{
           if (verified) setUser({ verified: true, ...verified });
 
           window.history.replaceState({}, document.title, window.location.pathname);
-        } else {
-          const profile = await client.hydrateSession();
-          if (profile) setUser({ verified: false, ...profile });
+        } else if (restore !== "none") {
+          const silent = restore === "silent" ? await client.silentAuthorize({ timeoutMs: silentTimeoutMs }) : null;
+
+          if (silent) {
+            setTokens(silent.tokens);
+            if (silent.user) setUser({ verified: true, ...silent.user });
+          } else if (profile?.restoreSession) {
+            const restored = await client.restoreSession();
+            if (restored) setUser({ verified: false, ...restored });
+          }
         }
       } catch (err: any) {
         setError(err);
@@ -77,7 +96,7 @@ export const AuthProvider: React.FC<{
     };
 
     init();
-  }, [client]);
+  }, [client, restore, silentTimeoutMs, profile]);
 
   const login = async (options?: LoginOptions | React.MouseEvent<HTMLElement>) => {
     // `login` is commonly passed straight to `onClick`, so an event argument is discarded
@@ -95,25 +114,11 @@ export const AuthProvider: React.FC<{
     try {
       setIsLoading(true);
 
-      if (tokens?.id_token) {
-        // The id_token_hint tells the provider which session to end, so it can clear the
-        // HttpOnly cookie it set.
-        const logoutUrl = await client.getLogoutUrl(tokens.id_token, returnTo);
-        setUser(null);
-        setTokens(null);
-        window.location.href = logoutUrl;
-      } else {
-        // A hydrated session has no id_token to hint with, and discovery cannot help:
-        // `end_session_endpoint` is what getLogoutUrl() needs the hint *for*. So fall back
-        // to the reference provider's logout path.
-        //
-        // This is the one provider-specific URL in the library. Against a different provider,
-        // handle logout in your own code rather than relying on this branch.
-        const logoutUrl = `${config.issuer.replace(/\/+$/, "")}/api/logout?post_logout_redirect_uri=${encodeURIComponent(returnTo)}`;
-        setUser(null);
-        setTokens(null);
-        window.location.href = logoutUrl;
-      }
+      // With an ID token the provider knows which session to end; without one it is sent `client_id` and may ask the user to confirm.
+      const logoutUrl = await client.getLogoutUrl(tokens?.id_token, returnTo);
+      setUser(null);
+      setTokens(null);
+      window.location.href = logoutUrl;
     } catch (err) {
       console.error("Logout failed:", err);
       setUser(null);
@@ -122,20 +127,29 @@ export const AuthProvider: React.FC<{
     }
   };
 
-  const value = { user, tokens, isAuthenticated: !!user, isLoading, error, login, logout };
+  const value = useMemo<AuthState>(() => {
+    const state: AuthState = { user, tokens, isAuthenticated: !!user, isLoading, error, login, logout, client };
+    // Namespaced, as on the client: `useAuth().wilsoon.reauthorize()`.
+    const name = client.profileName;
+    if (name) (state as unknown as Record<string, unknown>)[name] = (client as unknown as Record<string, unknown>)[name];
+    return state;
+  }, [user, tokens, isLoading, error, client]);
+
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
 /**
  * Reads the session state and actions from the nearest {@link AuthProvider}.
+ * Pass the profile's type to get its extensions typed: `useAuth<ReturnType<typeof wilsoon>>().wilsoon`.
+ *
  * @throws If called outside an {@link AuthProvider}.
  */
-export const useAuth = () => {
+export const useAuth = <P extends ProviderProfile<string, object> | undefined = undefined>(): AuthState & ProfileExtensions<P> => {
   const context = useContext(AuthContext);
   if (!context) {
     throw new Error("useAuth must be used within an AuthProvider");
   }
-  return context;
+  return context as AuthState & ProfileExtensions<P>;
 };
 
 export * from "./types";

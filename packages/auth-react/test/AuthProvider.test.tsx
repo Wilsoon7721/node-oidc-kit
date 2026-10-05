@@ -1,8 +1,8 @@
 import React from 'react';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { STORAGE_KEYS } from '@wilsoon/auth-core';
-import { AuthProvider, useAuth } from '../src/index';
+import { DEFAULT_STORAGE_KEYS as STORAGE_KEYS, defineProfile, type ProfileContext } from '@wilsoon/auth-core';
+import { AuthProvider, useAuth, type AuthProviderProps } from '../src/index';
 import { CLIENT_ID, OTHER_CLIENT_ID, startFakeIdp, unsignedToken, type FakeIdp } from '../../auth-core/test/fake-idp';
 
 let idp: FakeIdp;
@@ -18,7 +18,7 @@ const Probe = () => {
             <div data-testid="authenticated">{String(isAuthenticated)}</div>
             <div data-testid="verified">{user ? String(user.verified) : 'none'}</div>
             <div data-testid="name">{user?.name ?? 'none'}</div>
-            <div data-testid="role">{user && user.verified ? user.role : 'none'}</div>
+            <div data-testid="role">{user && user.verified ? user.roles.join(',') || 'none' : 'none'}</div>
             <div data-testid="amr">{user && user.verified ? user.authMethods.join(',') : 'none'}</div>
             <div data-testid="error">{error ? (error as { code?: string }).code ?? error.message : 'none'}</div>
             <button onClick={login}>Log in</button>
@@ -27,9 +27,21 @@ const Probe = () => {
     );
 };
 
-const renderProvider = () => render(
-    <AuthProvider clientId={CLIENT_ID} issuer={idp.issuer} redirectUri="http://localhost:3000/callback">
-        <Probe />
+/** The 2.x cookie restore, as a profile: userinfo with credentials, answered from a provider cookie. */
+const cookieProfile = defineProfile({
+    name: 'cookie',
+    restoreSession: async (ctx: ProfileContext) => {
+        const response = await fetch((await ctx.getEndpoints()).userinfo_endpoint, { credentials: 'include' });
+        if (!response.ok) return null;
+        const body = await response.json();
+        return { id: body.sub, name: body.name, email: body.email };
+    },
+    extend: () => ({ ping: () => 'pong' }),
+});
+
+const renderProvider = (props: Partial<AuthProviderProps> = {}, probe: React.ReactNode = <Probe />) => render(
+    <AuthProvider clientId={CLIENT_ID} issuer={idp.issuer} redirectUri="http://localhost:3000/callback" rolesClaim="role" restore="none" {...props}>
+        {probe}
     </AuthProvider>
 );
 
@@ -71,7 +83,7 @@ afterEach(() => {
 
 describe('AuthProvider hydration', () => {
     it('hydrates an unverified profile from the session cookie', async () => {
-        renderProvider();
+        renderProvider({ profile: cookieProfile, restore: 'profile' });
         await settled();
 
         expect(screen.getByTestId('authenticated').textContent).toBe('true');
@@ -84,7 +96,7 @@ describe('AuthProvider hydration', () => {
     it('stays unauthenticated when there is no session', async () => {
         idp.setUserinfo({ error: 'invalid_token' }, 401);
         try {
-            renderProvider();
+            renderProvider({ profile: cookieProfile, restore: 'profile' });
             await settled();
 
             expect(screen.getByTestId('authenticated').textContent).toBe('false');
@@ -259,7 +271,120 @@ describe('AuthProvider callback', () => {
     });
 });
 
+describe('AuthProvider silent restore', () => {
+    /**
+     * jsdom does not navigate iframes, so this stands in for the provider: it reads the authorize URL off the frame and decides where the frame lands.
+     * `"cross-origin"` makes the landing unreadable, which is what a provider page or a framing refusal looks like.
+     */
+    const landSilentFrame = (landing: (authorize: URL) => string) => {
+        const original = document.body.appendChild.bind(document.body);
+        const frames: URL[] = [];
+
+        vi.spyOn(document.body, 'appendChild').mockImplementation(<T extends Node>(node: T): T => {
+            if (!(node instanceof HTMLIFrameElement)) return original(node);
+
+            const authorize = new URL(node.src);
+            frames.push(authorize);
+            const target = landing(authorize);
+            Object.defineProperty(node, 'contentWindow', {
+                configurable: true,
+                get: () => ({
+                    get location() {
+                        if (target === 'cross-origin') throw new DOMException('Blocked a frame from accessing a cross-origin frame.', 'SecurityError');
+                        return { href: target };
+                    },
+                }),
+            });
+            original(node);
+            setTimeout(() => node.dispatchEvent(new Event('load')), 0);
+            return node;
+        });
+
+        return frames;
+    };
+
+    it('restores a verified session through prompt=none without touching the login state', async () => {
+        const frames = landSilentFrame((authorize) => {
+            idp.setTokenHandler(async () => ({ body: { access_token: await idp.mintAccessToken(), id_token: await idp.mintIdToken({ nonce: authorize.searchParams.get('nonce') }) } }));
+            return `http://localhost:3000/callback?code=silent-code&state=${authorize.searchParams.get('state')}`;
+        });
+
+        renderProvider({ restore: 'silent' });
+        await settled();
+
+        expect(screen.getByTestId('verified').textContent).toBe('true');
+        expect(screen.getByTestId('role').textContent).toBe('admin');
+        expect(frames[0].searchParams.get('prompt')).toBe('none');
+        expect(idp.tokenRequests.at(-1)?.get('code')).toBe('silent-code');
+        // The attempt kept its values in memory, so an interactive login in another tab is not clobbered.
+        expect(window.sessionStorage.getItem(STORAGE_KEYS.state)).toBeNull();
+        expect(document.querySelector('iframe')).toBeNull();
+    });
+
+    it('treats login_required as signed out, and falls back to the profile restore', async () => {
+        landSilentFrame((authorize) => `http://localhost:3000/callback?error=login_required&state=${authorize.searchParams.get('state')}`);
+        const before = idp.tokenHits;
+
+        renderProvider({ restore: 'silent', profile: cookieProfile });
+        await settled();
+
+        expect(screen.getByTestId('error').textContent).toBe('none');
+        expect(screen.getByTestId('verified').textContent).toBe('false');
+        expect(screen.getByTestId('name').textContent).toBe('Ada Lovelace');
+        expect(idp.tokenHits).toBe(before);
+    });
+
+    it('stays signed out without a fallback, and gives up at once on an unreadable frame', async () => {
+        landSilentFrame(() => 'cross-origin');
+        const started = Date.now();
+
+        renderProvider({ restore: 'silent' });
+        await settled();
+
+        expect(screen.getByTestId('authenticated').textContent).toBe('false');
+        expect(screen.getByTestId('error').textContent).toBe('none');
+        expect(Date.now() - started).toBeLessThan(5000);
+    });
+
+    it('surfaces a real denial rather than reading it as signed out', async () => {
+        landSilentFrame((authorize) => `http://localhost:3000/callback?error=access_denied&state=${authorize.searchParams.get('state')}`);
+
+        renderProvider({ restore: 'silent' });
+        await settled();
+
+        expect(screen.getByTestId('error').textContent).toBe('AUTHORIZATION_RESPONSE_ERROR');
+    });
+
+    it('does nothing when it is itself the page inside the silent frame', async () => {
+        const parent = Object.getOwnPropertyDescriptor(window, 'parent');
+        Object.defineProperty(window, 'parent', { configurable: true, value: {} });
+        try {
+            setLocation('?code=meant-for-the-parent&state=whatever');
+            const before = idp.tokenHits;
+
+            renderProvider({ restore: 'silent' });
+            await settled();
+
+            expect(idp.tokenHits).toBe(before);
+            expect(screen.getByTestId('error').textContent).toBe('none');
+        } finally {
+            if (parent) Object.defineProperty(window, 'parent', parent);
+        }
+    });
+});
+
 describe('useAuth', () => {
+    it('exposes the profile extensions under its name, and the client', async () => {
+        const Extensions = () => {
+            const auth = useAuth<typeof cookieProfile>();
+            return <div data-testid="ping">{auth.isLoading ? 'loading' : `${auth.cookie.ping()} ${auth.client.profileName}`}</div>;
+        };
+
+        renderProvider({ profile: cookieProfile }, <Extensions />);
+
+        await waitFor(() => expect(screen.getByTestId('ping').textContent).toBe('pong cookie'));
+    });
+
     it('throws outside a provider', () => {
         const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
 
