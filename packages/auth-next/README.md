@@ -8,7 +8,7 @@ Siblings: [`@wilsoon/auth-core`](https://www.npmjs.com/package/@wilsoon/auth-cor
 
 ## Features
 
-- **Verified sessions:** `getSession()` verifies the ID token's signature, issuer, audience and expiry against the provider's JWKS on every request, so `user.role` and `user.authMethods` can gate access.
+- **Verified sessions:** `getSession()` verifies the ID token's signature, issuer, audience and expiry against the provider's JWKS on every request, so `user.roles`, `user.permissions` and `user.authMethods` can gate access.
 - **Edge Middleware:** Protect your routes, enforce role/`amr` policies, and refresh tokens at the Edge.
 - **Server Components:** Access session data securely using `next/headers` without client-side waterfalls.
 - **Client Components:** Re-exports `@wilsoon/auth-react` so you can use it client-side with `"use client"`.
@@ -19,8 +19,8 @@ Siblings: [`@wilsoon/auth-core`](https://www.npmjs.com/package/@wilsoon/auth-cor
 npm install @wilsoon/auth-next @wilsoon/auth-core @wilsoon/auth-react
 ```
 
-Full end-to-end recipes, migration notes and a troubleshooting table live in the
-[integration guide](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/INTEGRATION.md).
+Full end-to-end recipes and a troubleshooting table live in the
+[recipes](https://docs.wilsoon.dev/node-oidc-kit/recipes/nextjs). Migration notes are in the [changelog](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/CHANGELOG.md).
 
 ## Basic Usage
 
@@ -77,13 +77,13 @@ export default async function DashboardPage() {
   return (
     <div>
       <h1>Welcome to your Dashboard, {user.email}!</h1>
-      <p>Role: {user.role}</p>
+      <p>Roles: {user.roles.join(", ")}</p>
     </div>
   );
 }
 ```
 
-`user` is `null` unless the ID token verified, so `user.role` is a verified claim rather than a decoded one. When a cookie was present but unusable, the reason is in `error`.
+`user` is `null` unless the ID token verified, so `user.roles` is a verified claim rather than a decoded one. When a cookie was present but unusable, the reason is in `error`.
 
 For a guard clause, `requireSession()` throws instead:
 

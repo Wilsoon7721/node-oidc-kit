@@ -2,39 +2,39 @@
   "project": "node-oidc-kit",
   "sections": {
     "core-concepts/security-model": {
-      "hash": "e3a12a24c5f43e0457545dc77a8cdf1bbbc1e4cd042ee8d47bc832b2403fc76c",
-      "published": "e3a12a24c5f43e0457545dc77a8cdf1bbbc1e4cd042ee8d47bc832b2403fc76c",
-      "pushedAt": "2026-08-31T15:46:11.364Z"
+      "hash": "c9e07f210d9ef3457ad5b2414b775e2a12c17ed1fe8e4fd9911b6aca67385543",
+      "published": "c9e07f210d9ef3457ad5b2414b775e2a12c17ed1fe8e4fd9911b6aca67385543",
+      "pushedAt": "2026-10-05T18:29:24.485Z"
     },
     "core-concepts/session-models": {
-      "hash": "5e5a6119491a5a522816a385eca9668aab208a65d400cd02af4c790744dfd9c7",
-      "published": "5e5a6119491a5a522816a385eca9668aab208a65d400cd02af4c790744dfd9c7",
-      "pushedAt": "2026-08-31T08:25:48.543Z"
+      "hash": "951c6166c017d4bf329ca37136292e2324bf080b41a0a21761e898d2b4ada3fb",
+      "published": "951c6166c017d4bf329ca37136292e2324bf080b41a0a21761e898d2b4ada3fb",
+      "pushedAt": "2026-10-05T18:29:28.339Z"
     },
     "core-concepts/storage": {
-      "hash": "ab0a838d6f8b1020487d119795df255ca2a94b687071fad16c5f3ef33decedda",
-      "published": "ab0a838d6f8b1020487d119795df255ca2a94b687071fad16c5f3ef33decedda",
-      "pushedAt": "2026-08-31T15:46:11.687Z"
+      "hash": "f2606f4ec033bc8240bb80877bd1ef228f48c0ea12bdd16fdf9dc9d5b0a3b584",
+      "published": "f2606f4ec033bc8240bb80877bd1ef228f48c0ea12bdd16fdf9dc9d5b0a3b584",
+      "pushedAt": "2026-10-05T18:29:29.081Z"
     },
     "core-concepts/your-own-provider": {
-      "hash": "a7df246a1845711daecc25891750202f6e24e8e2470652dc3b3a1ed72fc0bfc7",
-      "published": "a7df246a1845711daecc25891750202f6e24e8e2470652dc3b3a1ed72fc0bfc7",
-      "pushedAt": "2026-08-31T15:46:11.955Z"
+      "hash": "422de16d11d3ad2f9af6968e715863fa521101341b5bb9eedb45fedc67256edf",
+      "published": "422de16d11d3ad2f9af6968e715863fa521101341b5bb9eedb45fedc67256edf",
+      "pushedAt": "2026-10-05T18:29:29.308Z"
     },
     "getting-started/installation": {
-      "hash": "0cb46f9ff6c6da2108817f2ed72e0f918d1981a8bd25d15d927705fba4835fe0",
-      "published": "0cb46f9ff6c6da2108817f2ed72e0f918d1981a8bd25d15d927705fba4835fe0",
-      "pushedAt": "2026-08-31T15:46:13.568Z"
+      "hash": "9a8873ef5d2abfe7a71224c08daed657a0959f75ba951b5368cea6b29c891ab5",
+      "published": "9a8873ef5d2abfe7a71224c08daed657a0959f75ba951b5368cea6b29c891ab5",
+      "pushedAt": "2026-10-05T18:29:29.717Z"
     },
     "getting-started/introduction": {
-      "hash": "07cc3f459fb3add848e25401f9b9ea05add506398ac24677458a2cdb9e001aee",
-      "published": "07cc3f459fb3add848e25401f9b9ea05add506398ac24677458a2cdb9e001aee",
-      "pushedAt": "2026-08-31T15:46:13.843Z"
+      "hash": "d42e240331bae8a7f9b36cc6235f7313cbceb958772e679346df10e079efe4d0",
+      "published": "d42e240331bae8a7f9b36cc6235f7313cbceb958772e679346df10e079efe4d0",
+      "pushedAt": "2026-10-05T18:29:29.802Z"
     },
     "getting-started/quick-start": {
-      "hash": "d1805ab13f1dc199e01cd94c5d1eb278a32dfab42531635373237b999bc3db91",
-      "published": "d1805ab13f1dc199e01cd94c5d1eb278a32dfab42531635373237b999bc3db91",
-      "pushedAt": "2026-08-31T15:46:14.251Z"
+      "hash": "725f386d521f064b151d4173d0463aa13e3fd4e713a55afb048f801925c73fcc",
+      "published": "725f386d521f064b151d4173d0463aa13e3fd4e713a55afb048f801925c73fcc",
+      "pushedAt": "2026-10-05T18:29:29.894Z"
     },
     "flows/device-grant": {
       "hash": "36cd1bc897458a35eac8b8b87b656658473558676c274188a7eea5f62a7e2843",
@@ -42,19 +42,59 @@
       "pushedAt": "2026-08-31T15:46:12.224Z"
     },
     "flows/escalation": {
-      "hash": "0c6a5c288eb3e1fb342ae6593cca922a5f6d9414df6c7c396668b81e3082c6e3",
-      "published": "0c6a5c288eb3e1fb342ae6593cca922a5f6d9414df6c7c396668b81e3082c6e3",
-      "pushedAt": "2026-08-31T15:46:12.506Z"
+      "hash": "ba7f0d874bf25a273b821ffabfd68c65a1afb2bdedfc242f3fc257e7e6c82a50",
+      "published": "ba7f0d874bf25a273b821ffabfd68c65a1afb2bdedfc242f3fc257e7e6c82a50",
+      "pushedAt": "2026-10-05T18:29:29.420Z"
     },
     "flows/machine-tokens": {
-      "hash": "931c30cfa10e0026b494942591d8f67778969ceeb042ad896b58ce935023d7df",
-      "published": "931c30cfa10e0026b494942591d8f67778969ceeb042ad896b58ce935023d7df",
-      "pushedAt": "2026-08-31T15:46:13.082Z"
+      "hash": "06d49a3ece40ae9c6affe4b5d13ec1a391c05bbd96c134f2dae99fca0e53834d",
+      "published": "06d49a3ece40ae9c6affe4b5d13ec1a391c05bbd96c134f2dae99fca0e53834d",
+      "pushedAt": "2026-10-05T18:29:29.518Z"
     },
     "flows/step-up": {
-      "hash": "71c7ddf765307f70ef7a7cdbaee77a42575ddc21f66e1e33dd90dd1a160c0e56",
-      "published": "71c7ddf765307f70ef7a7cdbaee77a42575ddc21f66e1e33dd90dd1a160c0e56",
-      "pushedAt": "2026-08-31T15:46:13.327Z"
+      "hash": "9e727dab3f5d87d1c5fb18885a9c097911e3b273602b234a45627e332b6804d0",
+      "published": "9e727dab3f5d87d1c5fb18885a9c097911e3b273602b234a45627e332b6804d0",
+      "pushedAt": "2026-10-05T18:29:29.630Z"
+    },
+    "recipes/authorization": {
+      "hash": "2b00df0d7298fab19fd506af637d8d10df792d62b642aab9a9c85845883b6e89",
+      "published": "2b00df0d7298fab19fd506af637d8d10df792d62b642aab9a9c85845883b6e89",
+      "pushedAt": "2026-10-05T18:29:29.978Z"
+    },
+    "recipes/checklist": {
+      "hash": "566ac90e0042e5867c0ba012bced0b937ecbd38372d77940b80ac86d641be577",
+      "published": "566ac90e0042e5867c0ba012bced0b937ecbd38372d77940b80ac86d641be577",
+      "pushedAt": "2026-10-05T18:29:30.052Z"
+    },
+    "recipes/logout": {
+      "hash": "c5bc579cbfc4e0e62de895a9b9d9a459d2dd3dab727413ec95d2f20660c121c2",
+      "published": "c5bc579cbfc4e0e62de895a9b9d9a459d2dd3dab727413ec95d2f20660c121c2",
+      "pushedAt": "2026-10-05T18:29:30.125Z"
+    },
+    "recipes/nextjs": {
+      "hash": "8df990993575f02f9a795ba88bbbcc2aa403e480ce17c65725c04648cbfacc58",
+      "published": "8df990993575f02f9a795ba88bbbcc2aa403e480ce17c65725c04648cbfacc58",
+      "pushedAt": "2026-10-05T18:29:33.118Z"
+    },
+    "recipes/other-frameworks": {
+      "hash": "408555ce3ddf84b853d767a3f664be82cd735696152d6789e394cb794f1850d6",
+      "published": "408555ce3ddf84b853d767a3f664be82cd735696152d6789e394cb794f1850d6",
+      "pushedAt": "2026-10-05T18:29:34.365Z"
+    },
+    "recipes/react-spa": {
+      "hash": "4f362ce519b3ea05951dd5d4bed0f2500c8e542ac70d7bc264a9f064b1fd6d46",
+      "published": "4f362ce519b3ea05951dd5d4bed0f2500c8e542ac70d7bc264a9f064b1fd6d46",
+      "pushedAt": "2026-10-05T18:29:34.440Z"
+    },
+    "recipes/resource-server": {
+      "hash": "fda53073c7c5b5f85e5b9a6f92b941c59c38c22429115f6ae249b0e685ebfe59",
+      "published": "fda53073c7c5b5f85e5b9a6f92b941c59c38c22429115f6ae249b0e685ebfe59",
+      "pushedAt": "2026-10-05T18:29:34.510Z"
+    },
+    "recipes/troubleshooting": {
+      "hash": "b885068af8d4f84cbbbd293c5196d5ca3fc42311105ed3e51c010278aa6247b4",
+      "published": "b885068af8d4f84cbbbd293c5196d5ca3fc42311105ed3e51c010278aa6247b4",
+      "pushedAt": "2026-10-05T18:29:34.589Z"
     }
   }
 }

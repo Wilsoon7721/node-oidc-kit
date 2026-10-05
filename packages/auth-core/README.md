@@ -21,7 +21,7 @@ Siblings: **`@wilsoon/auth-core`** · [`@wilsoon/auth-react`](https://www.npmjs.
 npm install @wilsoon/auth-core
 ```
 
-Wiring up a whole application? Start with the [integration guide](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/INTEGRATION.md) - end-to-end recipes
+Wiring up a whole application? Start with the [recipes](https://docs.wilsoon.dev/node-oidc-kit/recipes/nextjs) - end-to-end wiring
 for Next.js, React SPAs, other server frameworks and APIs, plus a troubleshooting table.
 
 Using a framework with no package here (Astro, SvelteKit, Hono, Express)? Use this package
@@ -33,13 +33,14 @@ the entire integration.
 `verifyIdToken()` is the only method that returns `role`, `authMethods` and `sessionVersion`, and it returns them **only after** verifying the token:
 
 ```typescript
-import { AMR, AuthClient, MemoryStorage, satisfiesAmr } from "@wilsoon/auth-core";
+import { AMR, AuthClient, hasRole, MemoryStorage, satisfiesAmr } from "@wilsoon/auth-core";
 
 const client = new AuthClient(
   {
     clientId: process.env.OIDC_CLIENT_ID!,
     issuer: "https://id.example.com",
     redirectUri: "https://app.example.com/callback",
+    rolesClaim: "roles", // where your provider puts roles, if it does
   },
   new MemoryStorage(),
 );
@@ -47,7 +48,7 @@ const client = new AuthClient(
 // Signature (JWKS/RS256) + iss + aud + exp are all checked here.
 const user = await client.verifyIdToken(idToken);
 
-if (user.role !== "admin") return deny();
+if (!hasRole(user, "admin")) return deny();
 if (!satisfiesAmr(user, [AMR.FIDO])) return stepUp();
 return allow();
 ```
@@ -61,18 +62,22 @@ that cookie holds the tokens of whichever service most recently completed a code
 the ID token inside it is addressed to that service alone - the access token is the one addressed
 to the whole platform.
 
-`verifyPlatformSession()` resolves a session from it: verify the access token, then take
-`role`/`amr`/`session_version` from introspection, which is live rather than as-minted.
+How to resolve a session from that access token is up to the provider, so since 3.0 it is a
+[provider profile](https://docs.wilsoon.dev/node-oidc-kit/core-concepts/your-own-provider)'s job.
+`resolveSession()` hands a sibling service's session to the profile, and throws
+`FOREIGN_SESSION` when there is none. The WilsoonID profile verifies the access token and takes
+the current permissions from introspection, which is live rather than as-minted:
 
 ```typescript
-const user = await client.verifyPlatformSession(tokens.access_token);
-user.source; // 'access_token'
+import { createAuthClient } from "@wilsoon/auth-core";
+import { wilsoon } from "@wilsoon/auth-provider-wilsoon";
+
+const client = createAuthClient({ ...config, profile: wilsoon({ platformSessionCacheSeconds: 30 }) });
+const user = await client.resolveSession(tokens);
 ```
 
-Needs `apiAudience` and a `clientSecret`. Set `platformSessionCacheSeconds` to reuse a resolved
-session briefly instead of introspecting on every request. `@wilsoon/auth-next`'s `getSession()`
-picks this path automatically when the cookie's ID token belongs to a sibling service - see the
-[integration guide](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/INTEGRATION.md#two-session-models--pick-yours-first).
+Needs `apiAudience` and a `clientSecret`. `@wilsoon/auth-next`'s `getSession()` picks this path
+automatically - see the [session models](https://docs.wilsoon.dev/node-oidc-kit/core-concepts/session-models).
 
 ## The login flow
 
@@ -115,18 +120,17 @@ const claims = await client.verifyAccessToken(bearerToken, {
 
 ## Which method returns what
 
-| Method                                      | Verified?                                           | Returns                                                                | Safe to authorize on                 |
-| ------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------ |
-| `verifyIdToken(idToken)`                    | signature, `iss`, `aud`, `exp`, `nonce`             | `AuthenticatedUser` - includes `role`, `authMethods`, `sessionVersion` | **Yes**                              |
-| `verifyPlatformSession(accessToken)`        | signature, `iss`, `aud`, `exp` + live introspection | `AuthenticatedUser` with live `role`                                   | **Yes**                              |
-| `verifyAccessToken(token, { audience })`    | signature, `iss`, `aud`, `exp`, scopes              | `AccessTokenClaims`                                                    | **Yes** (subject + scopes)           |
-| `handleCallback(url)`                       | everything `verifyIdToken` checks, plus `state`     | `{ tokens, user }`                                                     | **Yes**                              |
-| `getUser(accessToken)` / `hydrateSession()` | the provider validates the token                    | `ProfileUser` - `id`, `email`, `name`, `picture` only                  | No - carries no authorization claims |
-| `decodeIdTokenUnsafe(idToken)`              | **nothing**                                         | `UnverifiedUser`                                                       | **No**                               |
-| `parseIdToken(idToken)` _(deprecated)_      | **nothing**                                         | `UnverifiedUser`                                                       | **No**                               |
-| `isTokenNearExpiry(token)`                  | **nothing**                                         | `boolean` refresh hint                                                 | No                                   |
+| Method                                   | Verified?                                       | Returns                                                       | Safe to authorize on                 |
+| ---------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------- | ------------------------------------ |
+| `verifyIdToken(idToken)`                 | signature, `iss`, `aud`, `exp`, `nonce`         | `AuthenticatedUser` - `roles`, `permissions`, `authMethods`   | **Yes**                              |
+| `verifyAccessToken(token, { audience })` | signature, `iss`, `aud`, `exp`, scopes          | `AccessTokenClaims` - `roles`, `permissions`, scopes          | **Yes**                              |
+| `liveAccess(accessToken)`                | the provider, live (profile hook or RFC 7662)   | `LiveAccess` - `active`, plus current grants where available  | **Yes**                              |
+| `handleCallback(url)`                    | everything `verifyIdToken` checks, plus `state` | `{ tokens, user }`                                            | **Yes**                              |
+| `getUser(accessToken)`                   | the provider validates the token                | `ProfileUser` - `id`, `email`, `name`, `picture` only         | No - carries no authorization claims |
+| `decodeIdTokenUnsafe(idToken)`           | **nothing**                                     | `UnverifiedUser`                                              | **No**                               |
+| `isTokenNearExpiry(token)`               | **nothing**                                     | `boolean` refresh hint                                        | No                                   |
 
-`ProfileUser` has no `role` field at all, so authorizing on a userinfo result is a compile error rather than a silent `undefined`.
+`ProfileUser` has no `roles` field at all, so authorizing on a userinfo result is a compile error rather than a silent empty list.
 
 ## Authentication methods (`amr`)
 
@@ -151,30 +155,17 @@ assertAmr(user, [AMR.FIDO]); // throws ClaimValidationError
 ## Session revocation
 
 A JWT stays valid until it expires, so "sign out everywhere" does not take effect on its own.
-The reference provider bumps a per-user session version on revocation, and the ID token carries
-the version it was minted with. Comparing the two is what makes revocation enforceable - supply
-a resolver so the library can read the live value:
+`liveAccess()` asks the provider whether a token is still good - through the profile's hook when
+there is one, RFC 7662 introspection otherwise:
 
 ```typescript
-const client = new AuthClient({
-  ...config,
-  resolveSessionVersion: (userId) => myApi.getSessionVersion(userId),
-});
-
-if (!(await client.isSessionCurrent(user))) return reauthenticate();
+const access = await client.liveAccess(tokens.access_token);
+if (!access.active) return reauthenticate();
 ```
 
-With a confidential client you can skip the resolver and let the provider answer, via RFC 7662
-introspection:
-
-```typescript
-if (!(await client.isSessionCurrent(user, { token: idToken }))) return reauthenticate();
-
-// Or directly - also the way an API learns the live `role`, which access tokens do not carry:
-const info = await client.introspectToken(accessToken);
-```
-
-Without either route, `isSessionCurrent()` throws `SessionCheckUnavailableError` - it never assumes the session is current.
+In Next.js, `enforce: "live"` on the middleware does this on every request. The WilsoonID
+profile adds a `session_version` check, `client.wilsoon.isSessionCurrent(user)` - see the
+[session models](https://docs.wilsoon.dev/node-oidc-kit/core-concepts/session-models).
 
 ## Token refresh
 
@@ -197,45 +188,59 @@ The provider rotates refresh tokens and revokes the whole family if one is repla
 
 All errors extend `AuthError` and carry a stable `code`. `error instanceof StateMismatchError` now works (the base class used to overwrite subclass prototypes, making every specific check false).
 
+3.0 adds the codes `PROFILE_REQUIRED`, `FOREIGN_SESSION`, `SILENT_AUTH_UNAVAILABLE` and `INVALID_CONFIG`.
+
 `TokenVerificationError`, `ClaimValidationError`, `NonceMismatchError`, `StateMismatchError`, `IssuerMismatchError`, `AuthorizationResponseError`, `StorageUnavailableError`, `SessionCheckUnavailableError`, `CryptoUnavailableError`, `DiscoveryError`, `TokenExchangeError`, `TokenRefreshError`, `UserInfoError`, `LogoutError`, `NoTokenError`.
+
+## Migrating to 3.0
+
+The core no longer assumes one provider. For WilsoonID, install `@wilsoon/auth-provider-wilsoon`
+and pass `profile: wilsoon()`; escalation, platform sessions and `isSessionCurrent()` move to
+`client.wilsoon.*`. `role` gives way to `roles`/`permissions` arrays. Step-by-step notes are in the
+[changelog](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/CHANGELOG.md).
 
 ## Migrating from 1.x
 
-Nothing was removed; the unsafe paths still work and now warn. The changes that need attention
+2.0 removed nothing; the unsafe paths kept working and warned until 3.0 removed them. The changes that need attention
 (full notes in the [changelog](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/CHANGELOG.md)):
 
-1. **Authorize on `verifyIdToken()`.** `parseIdToken()` never checked a signature, so `role`/`authMethods` from it are attacker-controlled. It still decodes (for display), is `@deprecated`, warns once per process, and its return type is now `UnverifiedUser` with every security field optional.
+1. **Authorize on `verifyIdToken()`.** `parseIdToken()` never checked a signature, so `role`/`authMethods` from it are attacker-controlled. It was removed in 3.0; use `decodeIdTokenUnsafe()` when you only need display claims.
 
    ```diff
    - const user = client.parseIdToken(tokens.id_token);
    - if (user.role === 'admin') { /* ... */ }
    + const user = await client.verifyIdToken(tokens.id_token);
-   + if (user.role === 'admin') { /* ... */ }
+   + if (hasRole(user, 'admin')) { /* ... */ } // 3.0; 2.x read user.role
    ```
 
-2. **`getUser()` / `hydrateSession()` return `ProfileUser`.** Reading `.role`, `.authMethods` or `.sessionVersion` off them is now a compile error. At runtime those fields were always `undefined`/`[]`, because the userinfo endpoint never returned them - any check built on them was already broken, and inverted checks (`if (user.role === 'user') restrict()`) were failing open.
+2. **`getUser()` returns `ProfileUser`.** Reading `.role`, `.authMethods` or `.sessionVersion` off them is now a compile error. At runtime those fields were always `undefined`/`[]`, because the userinfo endpoint never returned them - any check built on them was already broken, and inverted checks (`if (user.role === 'user') restrict()`) were failing open.
 
-3. **`isTokenExpired()` no longer reports a token with no `exp` as valid.** It is renamed to `isTokenNearExpiry()`; the old name still works and warns.
+3. **`isTokenExpired()` no longer reports a token with no `exp` as valid.** It is renamed to `isTokenNearExpiry()`; the old name was removed in 3.0.
 
 4. **`createAuthorizeUrl()` persists `state`, `nonce` and the verifier** when storage is available, and returns `nonce` alongside `state` and `codeVerifier`. Pass `{ persist: false }` to keep managing them yourself.
 
 5. **`AuthClient` needs storage for storage-backed calls.** Previously the server-side default was `{} as AuthStorage`, which type-checked and then threw `TypeError: this.storage.setItem is not a function`. Pass `MemoryStorage`, a cookie store, or nothing if you never touch storage.
 
-6. **`User` is deprecated** in favour of `AuthenticatedUser` (verified), `ProfileUser` (userinfo) and `UnverifiedUser` (decoded). It remains exported as an alias of `AuthenticatedUser`.
+6. **`User` is deprecated** in favour of `AuthenticatedUser` (verified), `ProfileUser` (userinfo) and `UnverifiedUser` (decoded). The alias was removed in 3.0.
 
-7. **`role` is validated, not asserted.** An unrecognised value throws `ClaimValidationError`; an absent one falls back to the least-privileged `'user'`.
+7. **`role` is validated, not asserted.** In 2.x an unrecognised value threw `ClaimValidationError`. 3.0 replaces it with open `roles`/`permissions` lists - see [Roles and permissions](#roles-and-permissions).
 
 ## Claim shapes
 
-The token endpoint spreads identity claims flat onto the ID token (`role`, `amr`, `session_version`), while some documentation nests them under `oidc_fields`. Both shapes are read, with the nested one preferred when present. `sub` is always treated as the authoritative subject identifier.
+`decodeIdTokenUnsafe()` reads identity claims both flat and nested under `oidc_fields`, with the nested one preferred when present. `sub` is always treated as the authoritative subject identifier.
 
-## Roles
+## Roles and permissions
 
-`UserRole` is `'admin' | 'user'`, and a `role` claim outside that set throws
-`ClaimValidationError` rather than being asserted into the union - silently mapping an unknown
-role onto a known one is how privilege escalations ship. A provider that issues other roles
-needs `UserRole` and `USER_ROLES` in `types.ts` widened together. See
-[the provider-specific list](https://github.com/Wilsoon7721/node-oidc-kit#things-that-are-still-specific-to-one-provider).
+`roles` and `permissions` are plain string lists, filled from wherever your provider puts them:
+
+```typescript
+new AuthClient({ ...config, rolesClaim: "resource_access.my-app.roles", permissionsClaim: "permissions" });
+```
+
+Each selector is a dot path or a function of the claims. With none configured both lists are
+empty, so every check fails closed. `hasRole()` passes on any of the given roles,
+`hasPermission()` only on all of them, and `requireRole()` / `requirePermission()` throw instead.
+A provider profile can fill both lists itself.
 
 ## Environments Supported
 

@@ -18,8 +18,8 @@ Siblings: [`@wilsoon/auth-core`](https://www.npmjs.com/package/@wilsoon/auth-cor
 npm install @wilsoon/auth-react @wilsoon/auth-core
 ```
 
-Full end-to-end recipes, migration notes and a troubleshooting table live in the
-[integration guide](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/INTEGRATION.md).
+Full end-to-end recipes and a troubleshooting table live in the
+[recipes](https://docs.wilsoon.dev/node-oidc-kit/recipes/nextjs). Migration notes are in the [changelog](https://github.com/Wilsoon7721/node-oidc-kit/blob/main/CHANGELOG.md).
 
 ## Basic Usage
 
@@ -73,17 +73,17 @@ user?.name;
 user?.email;
 
 // Only after a verified callback exchange:
-if (user?.verified && user.role === "admin") {
+if (user?.verified && hasRole(user, "admin")) { // hasRole from @wilsoon/auth-core
   return <AdminNav />;
 }
 ```
 
-| How the session was established                           | `verified` | Has `role` / `authMethods` / `sessionVersion`   |
-| --------------------------------------------------------- | ---------- | ----------------------------------------------- |
-| OIDC callback (`?code=...`) - ID token verified           | `true`     | Yes                                             |
-| Page load, hydrated from the HttpOnly cookie via userinfo | `false`    | No - the userinfo endpoint does not return them |
+| How the session was established                         | `verified` | Has `roles` / `permissions` / `authMethods`     |
+| ------------------------------------------------------- | ---------- | ----------------------------------------------- |
+| OIDC callback (`?code=...`) - ID token verified         | `true`     | Yes                                             |
+| Page load, restored by a provider profile (via userinfo) | `false`   | No - the userinfo endpoint does not return them |
 
-TypeScript will not let you read `role` without narrowing on `verified` first, so a hydrated session cannot silently produce `undefined` where a role was expected.
+TypeScript will not let you read `roles` without narrowing on `verified` first, so a hydrated session cannot silently produce `undefined` where a role was expected.
 
 **Client-side checks are for rendering.** A browser can be told anything. Gate real access on the server with `@wilsoon/auth-next`'s `getSession()` / `requireSession()`, or with `verifyIdToken()` / `verifyAccessToken()` in your API.
 

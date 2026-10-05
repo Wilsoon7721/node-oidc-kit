@@ -131,7 +131,7 @@ not happen is the `acr` claim you did not read.
 | Honours `max_age`, and returns `auth_time` | `maxAuthAgeSeconds` rejects the token |
 | Advertises `acr_values_supported` | Nothing breaks; you have to know the values yourself |
 
-The reference provider does all three, and refuses an unsatisfiable request with
+WilsoonID does all three, and refuses an unsatisfiable request with
 `unmet_authentication_requirements` rather than issuing a code that would fail your check
 anyway.
 
@@ -139,12 +139,12 @@ anyway.
 
 [Method escalation](/flows/escalation) solves the same problem through a back channel, and is
 better in two specific cases - but it is a provider extension rather than a standard, so it
-only works against the reference provider.
+only works against WilsoonID, through its provider profile.
 
 | | Step-up (this page) | [Escalation](/flows/escalation) |
 | --- | --- | --- |
 | Basis | OIDC Core + RFC 9470 | Provider extension |
-| Works against | Any conforming provider | The reference provider only |
+| Works against | Any conforming provider | WilsoonID only (`profile: wilsoon()`) |
 | Mechanism | Redirect through `/authorize` | Back channel, then poll |
 | Suits a CLI | No - needs a redirect URI | Yes |
 | "Already satisfied" without prompting | No | Yes |

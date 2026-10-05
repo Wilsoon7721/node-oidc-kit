@@ -38,9 +38,9 @@ machine.clientId; // who called
 machine.tokenUse; // "client"
 ```
 
-`MachineClient` deliberately has no `id`, no `role` and no `authMethods`. There is no user, so there is nothing to read - a caller cannot accidentally pull a person out of it, because the type has no person-shaped fields. `verifyMachineToken()` refuses user tokens in turn, so the check runs in both directions.
+`MachineClient` deliberately has no `id`, no `roles` and no `authMethods`. There is no user, so there is nothing to read - a caller cannot accidentally pull a person out of it, because the type has no person-shaped fields. `verifyMachineToken()` refuses user tokens in turn, so the check runs in both directions.
 
-Session paths refuse machine tokens outright, with no opt-in at all: `verifyPlatformSession()`, `resolveSession()` and `isSessionCurrent()` all throw. There is no user behind a `client_id` to resolve a session for, and nothing to revoke against.
+Session paths refuse machine tokens outright, with no opt-in at all: `resolveSession()`, and the WilsoonID profile's `verifyPlatformSession()` and `isSessionCurrent()`, all throw. There is no user behind a `client_id` to resolve a session for, and nothing to revoke against.
 
 `isMachineToken(claims)` is exported from both packages for a server that only needs the one check. Pass it **verified** claims - an unverified decode tells you what the bearer chose to claim, which is a different question.
 

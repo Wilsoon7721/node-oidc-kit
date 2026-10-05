@@ -6,12 +6,16 @@ order: 1
 
 The library persists exactly four values, and it will not guess where to put them.
 
-| Key                         | Lifetime           | Purpose                                        |
-| --------------------------- | ------------------ | ---------------------------------------------- |
-| `STORAGE_KEYS.tokens`       | The session        | The token response blob                        |
-| `STORAGE_KEYS.state`        | One login, minutes | CSRF binding between authorize and callback    |
-| `STORAGE_KEYS.nonce`        | One login, minutes | Binds the ID token to _this_ authorize request |
-| `STORAGE_KEYS.codeVerifier` | One login, minutes | The PKCE secret                                |
+| Key (default name)                | Lifetime           | Purpose                                        |
+| --------------------------------- | ------------------ | ---------------------------------------------- |
+| `tokens` (`oidc_tokens`)          | The session        | The token response blob                        |
+| `state` (`oidc_state`)            | One login, minutes | CSRF binding between authorize and callback    |
+| `nonce` (`oidc_nonce`)            | One login, minutes | Binds the ID token to _this_ authorize request |
+| `codeVerifier` (`oidc_verifier`)  | One login, minutes | The PKCE secret                                |
+
+`storagePrefix` changes the `oidc_` prefix, and a provider profile can set exact names (the
+WilsoonID profile keeps its 2.x `wilsoon_id_tokens` and `wilsoon_auth_*`). `client.storageKeys`
+reports the names a client actually uses.
 
 The bottom three are the interesting ones. They're written when you build the authorize
 URL and read after the provider redirects back - a _different request_, often to a
@@ -35,7 +39,6 @@ interface AuthStorage {
 | `MemoryStorage`       | `@wilsoon/auth-core` | Tests, and single-process flows where authorize and callback are handled by the same instance. Does not survive a restart or a second replica.                                                                                                                    |
 | `UnavailableStorage`  | `@wilsoon/auth-core` | The server default when you pass nothing. Every method throws `StorageUnavailableError` naming the operation and the fix, instead of type-checking as valid storage and then failing later with `TypeError: setItem is not a function`.                           |
 | `ServerCookieStorage` | `@wilsoon/auth-next` | The Next.js cookie store. Writes `HttpOnly` + `SameSite=Lax`, short-lived for the transient three, long-lived for the token blob. Throws a useful error in a Server Component, where Next.js forbids cookie writes.                                               |
-| `CookieStorage`       | `@wilsoon/auth-core` | **Deprecated, all no-ops.** Written when the token cookie was readable from JS. The provider now sets it `HttpOnly` - correct, and also why no browser-side cookie adapter can ever see it again. Kept so existing calls compile; use `hydrateSession()` instead. |
 
 ## Writing your own
 
@@ -82,6 +85,9 @@ export class AstroServerStorage implements AuthStorage {
 }
 ```
 
+A fuller version, which keeps the transient three host-only and short-lived, is in
+[Other server frameworks](/recipes/other-frameworks).
+
 Then hand it to the client, and everything else works unchanged:
 
 ```ts
@@ -119,7 +125,7 @@ Most of these are things that have actually broken:
    reuses the JWKS cache across requests).
 
 {% aside title="Remapping the token cookie name" %}
-`STORAGE_KEYS` is fixed at the library level. To put the token blob under a different cookie
-name, map it inside your adapter - that's what the Next.js middleware's `cookieName`
-option does - rather than expecting the client to emit a different key.
+Names come from `storagePrefix` or the profile, per client. To put the token blob under a
+cookie name that follows neither, map it inside your adapter - that's what the Next.js
+middleware's `cookieName` option does - rather than expecting the client to emit a different key.
 {% /aside %}

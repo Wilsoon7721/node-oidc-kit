@@ -26,7 +26,7 @@ npm install @wilsoon/auth-machine
 
 {% callout type="note" title="auth-machine is 0.x, and stands alone" %}
 It has no dependency on `@wilsoon/auth-core`, so it is versioned independently of the other
-three rather than sharing their 2.x line. `0.x` reflects that its API may still move before
+three rather than sharing their 3.x line. `0.x` reflects that its API may still move before
 it has seen production use. See [Machine tokens](/flows/machine-tokens).
 {% /callout %}
 
@@ -45,7 +45,7 @@ hot path.
 | `nonce` echoed into the ID token                                 | ID token replay protection, mandatory in the OIDC spec           | `NonceMismatchError` on every login                                          |
 
 {% callout type="tip" %}
-Everything below `nonce` - `end_session_endpoint` for logout, `introspection_endpoint` for live revocation - is optional and degrades cleanly. You lose one feature, not the whole login. See [Pointing it at your own provider](/core-concepts/your-own-provider) for the full picture, including the handful of things that are still specific to one reference provider.
+Everything below `nonce` - `end_session_endpoint` for logout, `introspection_endpoint` for live revocation - is optional and degrades cleanly. You lose one feature, not the whole login. See [Pointing it at your own provider](/core-concepts/your-own-provider) for the full picture, including how a provider profile handles what is specific to one provider.
 {% /callout %}
 
 ## Optional endpoints, and what they unlock
@@ -56,7 +56,7 @@ Step-up needs nothing beyond the core four. The other two flows each need one mo
 | ----------------------------------- | ---------------------------------------------------- | --------------------------------------- |
 | [Step-up](/flows/step-up)           | Nothing; it is OIDC Core plus RFC 9470               | Works against any conforming provider   |
 | [Device grant](/flows/device-grant) | `device_authorization_endpoint` in discovery         | `DeviceFlowError` naming the gap        |
-| [Escalation](/flows/escalation)     | `<issuer>/api/escalate`, or `escalationEndpoint` set | Provider extension; nothing to discover |
+| [Escalation](/flows/escalation)     | The WilsoonID profile (`profile: wilsoon()`)         | `PROFILE_REQUIRED`; nothing to discover |
 
 ## Requirements
 
