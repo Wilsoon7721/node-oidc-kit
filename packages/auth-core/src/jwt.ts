@@ -183,6 +183,8 @@ export interface VerifyJwtParams {
   audience: string | string[];
   /** Leeway in seconds for time-based claims. */
   clockTolerance: number;
+  /** The `typ` header to require, when set. */
+  typ?: string;
 }
 
 /**
@@ -204,6 +206,7 @@ export async function verifyCompactJwt(keySet: RemoteKeySet, token: string, para
     algorithms: [...ALLOWED_ALGORITHMS],
     clockTolerance: params.clockTolerance,
     requiredClaims: ["exp"],
+    ...(params.typ ? { typ: params.typ } : {}),
   };
 
   try {

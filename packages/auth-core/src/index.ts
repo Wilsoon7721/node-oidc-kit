@@ -1,21 +1,18 @@
 import { AuthenticationChallenge, readAuthenticationChallenge } from "./challenge";
+import { readClaimList } from "./claims";
 import { AuthorizeDeviceOptions, DEVICE_GRANT_TYPE, DeviceAuthorization, DeviceAuthorizationOptions, DeviceGrantResult } from "./device";
-import { AuthError, AuthorizationDeniedError, AuthorizationExpiredError, AuthorizationResponseError, ClaimValidationError, DeviceFlowError, DiscoveryError, EscalationError, IssuerMismatchError, LogoutError, MachineTokenNotAllowedError, NonceMismatchError, NotAMachineTokenError, NoTokenError, SessionCheckUnavailableError, StateMismatchError, StorageUnavailableError, TokenExchangeError, TokenRefreshError, TokenVerificationError, UserInfoError } from "./errors";
+import { AuthError, AuthorizationDeniedError, AuthorizationExpiredError, AuthorizationResponseError, ClaimValidationError, DeviceFlowError, DiscoveryError, IssuerMismatchError, LogoutError, MachineTokenNotAllowedError, NonceMismatchError, NotAMachineTokenError, NoTokenError, StateMismatchError, StorageUnavailableError, TokenExchangeError, TokenRefreshError, TokenVerificationError, UserInfoError } from "./errors";
 import { CreateEscalationOptions, ESCALATION_TOKEN_TYPE, EscalationRequest, EscalationResult, ReauthorizeOptions, VerifiedEscalation } from "./escalation";
 import { decodeTokenPayloadUnsafe, RemoteKeySet, verifyCompactJwt } from "./jwt";
-import { tokenUseOf } from "./machine";
+import { LiveAccess, ProfileContext, ProfileExtensions, ProviderProfile } from "./profile";
 import { ACCESS_DENIED, AUTHORIZATION_PENDING, EXPIRED_TOKEN, PollStep, pollUntilResolved, SLOW_DOWN } from "./polling";
-import { AuthStorage, BrowserStorage, isUsableStorage, UnavailableStorage } from "./storage";
-import { AccessTokenClaims, AuthConfig, AuthenticatedUser, AuthorizeRequest, AuthorizeUrlOptions, CallbackResult, DiscoveryDocument, HandleCallbackOptions, IntrospectionResponse, MachineClient, PlatformSessionOptions, ProfileUser, TokenResponse, TokenUse, UnverifiedUser, USER_ROLES, UserRole, VerifyAccessTokenOptions, VerifyIdTokenOptions } from "./types";
+import { AuthStorage, BrowserStorage, DEFAULT_STORAGE_PREFIX, isUsableStorage, StorageKeys, storageKeysFor, UnavailableStorage } from "./storage";
+import { AccessTokenClaims, AuthConfig, AuthenticatedUser, AuthorizeRequest, AuthorizeUrlOptions, CallbackResult, DiscoveryDocument, HandleCallbackOptions, IntrospectionResponse, MachineClient, PlatformSessionOptions, ProfileUser, SilentAuthorizeOptions, TokenResponse, TokenUse, UnverifiedUser, VerifyAccessTokenOptions, VerifyIdTokenOptions } from "./types";
 import { generateNonce, generatePKCE, generateState, normalizeIssuer, timingSafeEqual } from "./utils";
 
 /**
- * The names the library reads and writes through {@link AuthStorage}.
- *
- * Exported because a storage adapter usually needs to tell them apart - the token blob is long-lived, the other three are single-use and expire in minutes.
- * See `ServerCookieStorage` in `@wilsoon/auth-next` for that split in practice.
- *
- * These are fixed at the library level. To put the token blob under a different cookie name, map it inside your adapter.
+ * The storage names 2.x used, which the `wilsoon()` profile keeps so nobody is signed out by the upgrade.
+ * @deprecated Since 3.0.0 - names now come from `storagePrefix` or the profile. Read `client.storageKeys` for the names a client actually uses.
  */
 export const STORAGE_KEYS = {
   /** The persisted token response. */
@@ -28,20 +25,29 @@ export const STORAGE_KEYS = {
   codeVerifier: "wilsoon_auth_verifier",
 } as const;
 
-const TOKEN_KEY = STORAGE_KEYS.tokens;
-
 const DEFAULT_SCOPES = ["openid", "profile", "email"];
 const DEFAULT_CLOCK_TOLERANCE_SECONDS = 60;
+const DEFAULT_SILENT_TIMEOUT_MS = 10_000;
 
 /** Authorization request parameters the library controls and `extraParams` may not override. */
 const RESERVED_AUTHORIZE_PARAMS = new Set(["client_id", "redirect_uri", "response_type", "scope", "state", "nonce", "code_challenge", "code_challenge_method"]);
 
-/** Upper bound on cached platform sessions, so a long-lived client cannot grow unbounded. */
-const SESSION_CACHE_MAX_ENTRIES = 500;
+/**
+ * The `error` values a `prompt=none` request returns when the user would have to interact.
+ * Each means "not signed in silently", not a failure.
+ */
+export const SILENT_AUTH_ERRORS: readonly string[] = ["login_required", "consent_required", "interaction_required", "account_selection_required"];
+
+/** Whether an error from `handleCallback()` after a `prompt=none` request just means "not signed in". */
+export function isSilentAuthError(error: unknown): boolean {
+  return error instanceof AuthorizationResponseError && SILENT_AUTH_ERRORS.includes(error.error);
+}
+
+/** The fields a profile's `mapUser` may not override, because they identify the token rather than describe the user. */
+const PROTECTED_USER_FIELDS = ["id", "issuer", "audience", "expiresAt", "issuedAt", "claims", "source", "nonce"] as const;
 
 /**
- * Fallback seconds between polls, used only when the provider names no interval of its own.
- * Matches RFC 8628's recommended default, which the escalation flow reuses.
+ * Fallback seconds between polls, used only when the provider doesn't provide an interval
  */
 const DEFAULT_POLL_INTERVAL_SECONDS = 5;
 
@@ -49,7 +55,14 @@ const warned = new Set<string>();
 const warnOnce = (key: string, message: string) => {
   if (warned.has(key)) return;
   warned.add(key);
-  if (typeof console !== "undefined") console.warn(`[WilsoonID] ${message}`);
+  if (typeof console !== "undefined") console.warn(`[node-oidc-kit] ${message}`);
+};
+
+const union = (a: readonly string[], b: readonly string[]): string[] => Array.from(new Set([...a, ...b]));
+
+const encodeBasic = (id: string, secret: string): string => {
+  const raw = `${encodeURIComponent(id)}:${encodeURIComponent(secret)}`;
+  return typeof btoa === "function" ? btoa(raw) : Buffer.from(raw).toString("base64");
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -60,7 +73,7 @@ const asStringArray = (value: unknown): string[] => (Array.isArray(value) ? valu
 
 const asNumber = (value: unknown): number | undefined => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  // The provider reads session_version out of Postgres, which can surface as a string.
+  // Some providers serialise numeric claims as strings.
   if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
   return undefined;
 };
@@ -71,25 +84,28 @@ const nowSeconds = () => Math.floor(Date.now() / 1000);
  * An OIDC relying party: discovery, authorization requests, code exchange, token verification and profile lookup for one registered client.
  *
  * Framework-agnostic: it depends on `fetch`, Web Crypto and an {@link AuthStorage} adapter and nothing else - so the same client works in a browser, in Node, and on an edge runtime.
+ * One rule governs everything below: authorization decisions must come from {@link AuthClient.verifyIdToken}, {@link AuthClient.verifyAccessToken} or {@link AuthClient.resolveSession}.
+ * Those are the only methods that check a signature against the provider's published keys. Every `*Unsafe` method may return attacker-controlled data.
  *
- * One rule governs everything below: authorization decisions must come from
- * {@link AuthClient.verifyIdToken}, {@link AuthClient.verifyAccessToken} or
- * {@link AuthClient.verifyPlatformSession}. Those are the only methods that check a
- * signature against the provider's published keys. Every `*Unsafe` method returns
- * attacker-controlled data by design.
+ * Provider-specific behaviour comes from {@link AuthConfig.profile}. Use {@link createAuthClient} to get its extensions typed under `client.<profile name>`.
  */
 export class AuthClient {
   private discoveryCache: DiscoveryDocument | null = null;
   private storage: AuthStorage;
   private keySet: RemoteKeySet;
   private refreshInFlight = new Map<string, Promise<TokenResponse>>();
-  private sessionCache = new Map<string, { user: AuthenticatedUser; expiresAt: number }>();
+  private profile?: ProviderProfile<string, object>;
+  private context?: ProfileContext;
+  private extensions: Record<string, unknown> = {};
+
+  /** The names this client stores its tokens and transient values under, from `storagePrefix` or the profile. */
+  public readonly storageKeys: Readonly<StorageKeys>;
 
   /**
    * @param storage Defaults to `localStorage` in the browser. On the server there is no
    * safe default, so storage-backed calls throw a {@link StorageUnavailableError} naming
    * the operation instead of failing later with a `TypeError` - pass an adapter.
-   * @throws {AuthError} If required configuration is missing or the issuer is not a URL.
+   * @throws {AuthError} If required configuration is missing, the issuer is not a URL, or the profile's name collides with a client member.
    */
   constructor(
     private config: AuthConfig,
@@ -112,6 +128,84 @@ export class AuthClient {
 
     this.storage = storage || (typeof window !== "undefined" ? new BrowserStorage() : new UnavailableStorage());
     this.keySet = new RemoteKeySet(config.jwks);
+
+    this.profile = config.profile;
+    const prefix = config.storagePrefix ?? this.profile?.storagePrefix ?? DEFAULT_STORAGE_PREFIX;
+    // An explicit `storagePrefix` is the app's own choice, so it wins over the profile's exact legacy names.
+    this.storageKeys = Object.freeze({ ...storageKeysFor(prefix), ...(config.storagePrefix === undefined ? this.profile?.storageKeys : {}) });
+
+    if (this.profile) this.attachProfile(this.profile);
+  }
+
+  /** The configured profile's name, or `undefined` when the client runs standards-only. */
+  public get profileName(): string | undefined {
+    return this.profile?.name;
+  }
+
+  private attachProfile(profile: ProviderProfile<string, object>): void {
+    const name = asString(profile.name);
+    if (!name) throw new AuthError("A provider profile needs a non-empty `name`.", "INVALID_CONFIG");
+    if (name in this) throw new AuthError(`The profile name "${name}" collides with an AuthClient member. Choose another name for its namespace.`, "INVALID_CONFIG");
+
+    const extensions = profile.extend?.(this.profileContext()) ?? {};
+    this.extensions = extensions as Record<string, unknown>;
+    Object.defineProperty(this, name, { value: Object.freeze({ ...extensions }), enumerable: false, configurable: false, writable: false });
+  }
+
+  /** The context handed to profile hooks, built once per client. */
+  private profileContext(): ProfileContext {
+    if (this.context) return this.context;
+
+    this.context = Object.freeze({
+      config: this.config,
+      client: this,
+      storage: this.storage,
+      storageKeys: this.storageKeys,
+      getEndpoints: () => this.getEndpoints(),
+      clientFetch: (url: string, init: RequestInit = {}) => this.clientFetch(url, init),
+      verifyJwt: async (token: string, options: { audience?: string | string[]; typ?: string } = {}) => {
+        if (!asString(token)) throw new NoTokenError("No token was provided.");
+        const { jwks_uri } = await this.getEndpoints();
+        return (await verifyCompactJwt(this.keySet, token, {
+          jwksUri: jwks_uri,
+          issuer: await this.issuerCandidates(),
+          audience: options.audience ?? this.config.clientId,
+          clockTolerance: this.clockTolerance(),
+          typ: options.typ,
+        })) as Record<string, unknown>;
+      },
+      introspect: (token: string) => this.introspectToken(token),
+      toUser: (claims: Record<string, unknown>, details: { source: "id_token" | "access_token"; audience: string }) => this.toAuthenticatedUser(claims, details),
+      classifyTokenUse: (claims: Record<string, unknown>) => this.classifyTokenUse(claims),
+      warnOnce,
+    });
+    return this.context;
+  }
+
+  /** Fetch with HTTP Basic client authentication, which keeps the secret out of the body. */
+  private clientFetch(url: string, init: RequestInit): Promise<Response> {
+    const headers = new Headers(init.headers);
+    const secret = asString(this.config.clientSecret);
+    if (secret && !headers.has("Authorization")) headers.set("Authorization", `Basic ${encodeBasic(this.config.clientId, secret)}`);
+    if (!headers.has("Accept")) headers.set("Accept", "application/json");
+    return fetch(url, { ...init, headers });
+  }
+
+  /** The access token audience: the config's, else the profile's default. */
+  private apiAudience(): string | undefined {
+    return asString(this.config.apiAudience) ?? asString(this.profile?.apiAudience);
+  }
+
+  /**
+   * Looks up a profile extension for a 2.x method that moved out of core.
+   * @throws {AuthError} With code `PROFILE_REQUIRED` when no configured profile provides it.
+   */
+  private extension<F extends (...args: never[]) => unknown>(method: string): F {
+    const fn = this.extensions[method];
+    if (typeof fn !== "function") throw new AuthError(`\`${method}()\` is provider-specific and moved out of @wilsoon/auth-core in 3.0.0. ` + "Configure a provider profile that provides it, such as the WilsoonID profile.", "PROFILE_REQUIRED");
+
+    warnOnce(`forwarder:${method}`, `client.${method}() is deprecated and will be removed in 4.0. Call client.${this.profile?.name}.${method}() on a client made with createAuthClient().`);
+    return fn as F;
   }
 
   /** Whether this client has a usable storage implementation. */
@@ -121,17 +215,17 @@ export class AuthClient {
 
   /** @throws {StorageUnavailableError} If no storage implementation is available. */
   public saveTokens(tokens: TokenResponse): void {
-    this.storage.setItem(TOKEN_KEY, JSON.stringify(tokens));
+    this.storage.setItem(this.storageKeys.tokens, JSON.stringify(tokens));
   }
 
   /**
    * Reads the persisted token response, or `null` if there is none or it is unusable.
    *
    * Never throws on a malformed value: a corrupt or truncated cookie should log the user out, not crash the request.
-   * Also tolerates a URI-encoded blob, which is how a provider that writes the cookie itself typically stores it.
+   * Also works with a URI-encoded blob which is how a provider that writes the cookie itself typically stores it.
    */
   public getStoredTokens(): TokenResponse | null {
-    const raw = this.readStorage(TOKEN_KEY);
+    const raw = this.readStorage(this.storageKeys.tokens);
     if (!raw) return null;
 
     const parse = (value: string): TokenResponse | null => {
@@ -154,14 +248,13 @@ export class AuthClient {
   }
 
   /**
-   * Removes the tokens and the transient `state`/`nonce`/verifier entries. No-ops when no storage is available.
-   *
+   * Removes the tokens and the transient `state`/`nonce`/verifier entries.
    * Local state only - this does not end the session at the identity provider. Use {@link AuthClient.getLogoutUrl} for that.
    */
   public clearStorage(): void {
     if (!this.hasStorage()) return;
 
-    this.storage.removeItem(TOKEN_KEY);
+    this.storage.removeItem(this.storageKeys.tokens);
     this.clearTransientState();
   }
 
@@ -222,25 +315,11 @@ export class AuthClient {
 
   private clearTransientState(): void {
     if (!this.hasStorage()) return;
-    for (const key of [STORAGE_KEYS.state, STORAGE_KEYS.nonce, STORAGE_KEYS.codeVerifier]) {
+    for (const key of [this.storageKeys.state, this.storageKeys.nonce, this.storageKeys.codeVerifier]) {
       try {
         this.storage.removeItem(key);
       } catch {}
     }
-  }
-
-  /**
-   * Narrows a raw `role` claim to {@link UserRole} instead of asserting it.
-   * Absent means least-privileged (`'user'`). Unrecognised values throw.
-   *
-   * @throws {ClaimValidationError} If the provider emitted a role outside {@link USER_ROLES}.
-   */
-  private toRole(value: unknown): UserRole {
-    const raw = asString(value);
-    if (!raw) return "user";
-    if ((USER_ROLES as readonly string[]).includes(raw)) return raw as UserRole;
-
-    throw new ClaimValidationError(`The identity provider issued an unrecognised role "${raw}". Expected one of: ${USER_ROLES.join(", ")}. ` + "Refusing to map it onto a known role - update @wilsoon/auth-core rather than guessing at its privileges.");
   }
 
   /** @throws {ClaimValidationError} If the userinfo response carries no subject identifier. */
@@ -260,38 +339,77 @@ export class AuthClient {
   }
 
   /**
-   * Maps claims that have already passed signature, issuer, audience and expiry checks onto
-   * {@link AuthenticatedUser}.
+   * Maps claims that have already passed signature, issuer, audience and expiry checks onto {@link AuthenticatedUser}.
+   * Standard claims first, then the profile's `mapUser`, then the configured `rolesClaim` / `permissionsClaim`, which win.
    *
-   * @throws {ClaimValidationError} If a required claim is missing or the role is unrecognised.
+   * @throws {ClaimValidationError} If `sub` or `exp` is missing.
    */
-  private toAuthenticatedUser(claims: Record<string, unknown>): AuthenticatedUser {
-    const fields = isRecord(claims.oidc_fields) ? claims.oidc_fields : claims;
+  private toAuthenticatedUser(claims: Record<string, unknown>, details: { source: "id_token" | "access_token"; audience: string } = { source: "id_token", audience: this.config.clientId }): AuthenticatedUser {
+    const label = details.source === "id_token" ? "ID token" : "access token";
 
     const id = asString(claims.sub);
-    if (!id) throw new ClaimValidationError("The ID token is missing the `sub` claim.");
+    if (!id) throw new ClaimValidationError(`The ${label} is missing the \`sub\` claim.`);
 
     const expiresAt = asNumber(claims.exp);
-    if (expiresAt === undefined) throw new ClaimValidationError("The ID token is missing the `exp` claim.");
+    if (expiresAt === undefined) throw new ClaimValidationError(`The ${label} is missing the \`exp\` claim.`);
 
-    return {
+    const frozen = Object.freeze({ ...claims });
+    const base: AuthenticatedUser = {
       id,
-      email: asString(fields.email) ?? asString(claims.email),
+      email: asString(claims.email),
       emailVerified: typeof claims.email_verified === "boolean" ? claims.email_verified : undefined,
-      name: asString(fields.name) ?? asString(claims.name),
-      picture: asString(fields.picture) ?? asString(claims.picture),
-      role: this.toRole(fields.role ?? claims.role),
-      authMethods: asStringArray(claims.amr ?? fields.amr),
-      sessionVersion: asNumber(fields.session_version ?? claims.session_version),
+      name: asString(claims.name),
+      picture: asString(claims.picture),
+      roles: [],
+      permissions: [],
+      authMethods: asStringArray(claims.amr),
+      sid: asString(claims.sid),
       issuer: asString(claims.iss) ?? "",
-      audience: this.config.clientId,
-      source: "id_token",
+      audience: details.audience,
+      source: details.source,
       issuedAt: asNumber(claims.iat),
       expiresAt,
       authTime: asNumber(claims.auth_time),
       nonce: asString(claims.nonce),
-      claims: Object.freeze({ ...claims }),
+      claims: frozen,
     };
+
+    // Dropping `undefined` keeps a profile from blanking a standard claim it did not mean to touch.
+    const extras = Object.fromEntries(Object.entries(this.profile?.mapUser?.(frozen) ?? {}).filter(([key, value]) => value !== undefined && !(PROTECTED_USER_FIELDS as readonly string[]).includes(key)));
+
+    const user = { ...base, ...extras } as AuthenticatedUser;
+    user.roles = this.config.rolesClaim ? readClaimList(frozen, this.config.rolesClaim) : asStringArray(user.roles);
+    user.permissions = this.config.permissionsClaim ? readClaimList(frozen, this.config.permissionsClaim) : asStringArray(user.permissions);
+    return user;
+  }
+
+  /** Roles and permissions for verified access token claims, read the same way as for a user. */
+  private accessTokenGrants(claims: Readonly<Record<string, unknown>>): { roles: string[]; permissions: string[] } {
+    const mapped = this.profile?.mapUser?.(claims) ?? {};
+    return {
+      roles: this.config.rolesClaim ? readClaimList(claims, this.config.rolesClaim) : asStringArray(mapped.roles),
+      permissions: this.config.permissionsClaim ? readClaimList(claims, this.config.permissionsClaim) : asStringArray(mapped.permissions),
+    };
+  }
+
+  /**
+   * Adds the roles and permissions a session's own access token carries, since providers often put them only there.
+   * Only a token that verifies, names this client as `client_id` and has the same subject counts. Anything else leaves the user unchanged.
+   */
+  private async withAccessTokenGrants(user: AuthenticatedUser, accessToken: string | undefined): Promise<AuthenticatedUser> {
+    if (!asString(accessToken) || !this.apiAudience()) return user;
+
+    let claims: AccessTokenClaims;
+    try {
+      claims = await this.verifyAccessToken(accessToken as string);
+    } catch (error) {
+      warnOnce("access-token-grants", `The session's access token did not verify against \`apiAudience\`, so its roles and permissions were not read (${error instanceof Error ? error.message : String(error)}).`);
+      return user;
+    }
+
+    if (claims.subject !== user.id || claims.clientId !== this.config.clientId) return user;
+
+    return { ...user, roles: union(user.roles, claims.roles), permissions: union(user.permissions, claims.permissions), sid: user.sid ?? claims.sid };
   }
 
   /** Maps decoded-but-unverified claims onto the legacy user shape. */
@@ -359,9 +477,9 @@ export class AuthClient {
     if (persist) {
       if (!this.hasStorage()) throw new StorageUnavailableError("Persisting the authorization request");
 
-      this.storage.setItem(STORAGE_KEYS.state, state);
-      this.storage.setItem(STORAGE_KEYS.nonce, nonce);
-      this.storage.setItem(STORAGE_KEYS.codeVerifier, codeVerifier);
+      this.storage.setItem(this.storageKeys.state, state);
+      this.storage.setItem(this.storageKeys.nonce, nonce);
+      this.storage.setItem(this.storageKeys.codeVerifier, codeVerifier);
     } else if (options.persist === undefined) {
       warnOnce("authorize-not-persisted", "createAuthorizeUrl() did not persist `state`, `nonce` or the PKCE verifier because no storage is configured. " + "Store all three yourself and pass them to handleCallback({ expected }), or construct the client with a storage implementation.");
     }
@@ -385,6 +503,8 @@ export class AuthClient {
 
     const clearTransient = options.clearTransient !== false;
 
+    await this.checkResponseIssuer(params, clearTransient);
+
     const providerError = params.get("error");
     if (providerError) {
       if (clearTransient) this.clearTransientState();
@@ -397,9 +517,9 @@ export class AuthClient {
 
     if (!options.expected && !this.hasStorage()) throw new StorageUnavailableError("Reading the pending authorization request");
 
-    const expectedState = options.expected?.state ?? this.readStorage(STORAGE_KEYS.state);
-    const expectedNonce = options.expected?.nonce ?? this.readStorage(STORAGE_KEYS.nonce);
-    const codeVerifier = options.expected?.codeVerifier ?? this.readStorage(STORAGE_KEYS.codeVerifier);
+    const expectedState = options.expected?.state ?? this.readStorage(this.storageKeys.state);
+    const expectedNonce = options.expected?.nonce ?? this.readStorage(this.storageKeys.nonce);
+    const codeVerifier = options.expected?.codeVerifier ?? this.readStorage(this.storageKeys.codeVerifier);
 
     // Throws when absent or mismatched: the CSRF check cannot be skipped on this path.
     this.validateState(returnedState || "", expectedState || "");
@@ -418,7 +538,7 @@ export class AuthClient {
       let user: AuthenticatedUser | null = null;
       if (tokens.id_token) {
         if (!expectedNonce) warnOnce("callback-without-nonce", "Verifying an ID token without a nonce: the token is not bound to this authorization request. " + "Persist the nonce from createAuthorizeUrl() and pass it via handleCallback({ expected: { nonce } }).");
-        user = await this.verifyIdToken(tokens.id_token, { nonce: expectedNonce || undefined });
+        user = await this.withAccessTokenGrants(await this.verifyIdToken(tokens.id_token, { nonce: expectedNonce || undefined }), tokens.access_token);
       }
 
       if (options.persistTokens) this.saveTokens(tokens);
@@ -427,6 +547,97 @@ export class AuthClient {
     } finally {
       if (clearTransient) this.clearTransientState();
     }
+  }
+
+  /**
+   * RFC 9207: an `iss` on the authorization response must be this provider's, which stops a mix-up between providers.
+   * Required when discovery advertises `authorization_response_iss_parameter_supported`.
+   */
+  private async checkResponseIssuer(params: URLSearchParams, clearTransient: boolean): Promise<void> {
+    const returned = params.get("iss");
+    const discovery = await this.getEndpoints();
+    const required = (discovery as unknown as Record<string, unknown>).authorization_response_iss_parameter_supported === true;
+    if (returned === null && !required) return;
+
+    if (returned === null || !(await this.issuerCandidates()).includes(returned)) {
+      if (clearTransient) this.clearTransientState();
+      throw new IssuerMismatchError(this.config.expectedIssuer ?? discovery.issuer, returned ?? "(none)");
+    }
+  }
+
+  /**
+   * Signs the user in without showing them anything, using an OIDC `prompt=none` request.
+   *
+   * In `"iframe"` mode (the default) the request runs in a hidden iframe and resolves with the verified result, or `null` when the user is not signed in at the provider or would have to interact.
+   * The `redirectUri` must be on this page's origin, and the provider must allow its authorization endpoint to be framed.
+   *
+   * @returns The callback result, or `null` when there is no silent session.
+   * @throws {AuthorizationResponseError} For a provider error other than the {@link SILENT_AUTH_ERRORS}, such as `access_denied`.
+   * @throws {AuthError} If there is no browser document to run in.
+   */
+  public async silentAuthorize(options: SilentAuthorizeOptions = {}): Promise<CallbackResult | null> {
+    const { mode = "iframe", timeoutMs = DEFAULT_SILENT_TIMEOUT_MS, ...authorize } = options;
+
+    if (typeof window === "undefined" || typeof document === "undefined") throw new AuthError("silentAuthorize() needs a browser. Server-rendered apps keep tokens server-side and refresh them instead.", "SILENT_AUTH_UNAVAILABLE");
+
+    if (mode === "redirect") {
+      const { url } = await this.createAuthorizeUrl({ ...authorize, prompt: "none" });
+      window.location.assign(url);
+      return null;
+    }
+
+    // Not persisted: the values stay in this closure, so a silent attempt cannot clobber an interactive login in progress.
+    const request = await this.createAuthorizeUrl({ ...authorize, prompt: "none", persist: false });
+    const callbackUrl = await this.runInHiddenFrame(request.url, timeoutMs);
+    if (!callbackUrl) return null;
+
+    try {
+      return await this.handleCallback(callbackUrl, { expected: { state: request.state, nonce: request.nonce, codeVerifier: request.codeVerifier }, clearTransient: false });
+    } catch (error) {
+      if (isSilentAuthError(error)) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * Loads `url` in a hidden iframe and returns the URL it lands on once it is back on this origin with a `code` or `error`.
+   * Resolves `null` on timeout, or as soon as the frame lands somewhere unreadable, which is what a provider page or a framing refusal looks like.
+   */
+  private runInHiddenFrame(url: string, timeoutMs: number): Promise<string | null> {
+    return new Promise((resolve) => {
+      const frame = document.createElement("iframe");
+      frame.setAttribute("aria-hidden", "true");
+      frame.setAttribute("tabindex", "-1");
+      frame.title = "Silent sign-in";
+      frame.style.cssText = "position:absolute;width:0;height:0;border:0;visibility:hidden";
+
+      let settled = false;
+      const finish = (result: string | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        frame.remove();
+        resolve(result);
+      };
+      const timer = setTimeout(() => finish(null), timeoutMs);
+
+      frame.addEventListener("load", () => {
+        let href: string;
+        try {
+          href = frame.contentWindow?.location.href ?? "";
+        } catch {
+          // Cross-origin: the provider rendered a page (it wants interaction) or refused to be framed.
+          return finish(null);
+        }
+        if (!href || href === "about:blank") return;
+
+        const landed = new URL(href);
+        if (landed.searchParams.has("code") || landed.searchParams.has("error")) finish(href);
+      });
+
+      frame.src = url;
+      document.body.appendChild(frame);
+    });
   }
 
   /**
@@ -494,26 +705,24 @@ export class AuthClient {
   }
 
   /**
-   * Restores browser session state when the tokens live in an HttpOnly cookie.
+   * Restores a browser session through the profile's non-standard `restoreSession` hook, such as a provider cookie.
    *
-   * Calls the userinfo endpoint with `credentials: 'include'` and no `Authorization` header: the browser attaches the session cookie itself, and the provider answers from it.
-   * This is the only way a browser can learn who it is signed in as when it cannot read the token.
-   *
-   * The result carries display claims only and is not sufficient to authorize on - that requires a provider whose userinfo endpoint accepts a cookie-authenticated request and sends CORS credentials headers for your origin.
-   *
+   * @deprecated Since 3.0.0 - use {@link AuthClient.silentAuthorize}, which is standard OIDC and returns a verified user. Without a profile that restores sessions this resolves `null`.
    * @returns The profile, or `null` if there is no usable session. Never throws.
    */
   public async hydrateSession(): Promise<ProfileUser | null> {
+    return this.restoreSession();
+  }
+
+  /** The profile's `restoreSession`, or `null` without one. Never throws. @internal */
+  public async restoreSession(): Promise<ProfileUser | null> {
+    const restore = this.profile?.restoreSession;
+    if (!restore) {
+      warnOnce("restore-without-profile", "hydrateSession() has nothing to restore from: cookie-based restore is provider-specific since 3.0.0. Use silentAuthorize(), or configure a profile.");
+      return null;
+    }
     try {
-      const { userinfo_endpoint } = await this.getEndpoints();
-      const response = await fetch(userinfo_endpoint, {
-        credentials: "include",
-      });
-
-      if (!response.ok) return null;
-
-      const raw = await response.json();
-      return this.toProfileUser(raw);
+      return await restore.call(this.profile, this.profileContext());
     } catch {
       return null;
     }
@@ -523,16 +732,17 @@ export class AuthClient {
    * Builds an RP-initiated logout URL from the provider's advertised `end_session_endpoint`.
    * Redirect the user agent to it to end the session at the provider, then clear your own storage.
    *
-   * @param idToken Sent as `id_token_hint`, so the provider knows which session to end.
+   * @param idToken Sent as `id_token_hint`, so the provider knows which session to end. Without one, `client_id` is sent and the provider may ask the user to confirm.
    * @param postLogoutRedirectUri Must be registered with the provider, or it will be ignored.
    * @throws {LogoutError} If the provider advertises no `end_session_endpoint`.
    */
-  public async getLogoutUrl(idToken: string, postLogoutRedirectUri: string): Promise<string> {
+  public async getLogoutUrl(idToken: string | null | undefined, postLogoutRedirectUri: string): Promise<string> {
     const { end_session_endpoint } = await this.getEndpoints();
     if (!end_session_endpoint) throw new LogoutError();
 
     const url = new URL(end_session_endpoint);
-    url.searchParams.set("id_token_hint", idToken);
+    if (asString(idToken)) url.searchParams.set("id_token_hint", idToken as string);
+    else url.searchParams.set("client_id", this.config.clientId);
     url.searchParams.set("post_logout_redirect_uri", postLogoutRedirectUri);
 
     return url.toString();
@@ -582,7 +792,7 @@ export class AuthClient {
 
     const tokens = await this.readTokenResponse(response, new TokenRefreshError("The token endpoint returned no access token."));
 
-    const persist = options.persist ?? (this.hasStorage() && this.readStorage(TOKEN_KEY) !== null);
+    const persist = options.persist ?? (this.hasStorage() && this.readStorage(this.storageKeys.tokens) !== null);
     if (persist) this.saveTokens(tokens);
 
     return tokens;
@@ -599,8 +809,7 @@ export class AuthClient {
    * say) rather than an authenticated session, and the two must not be interchangeable.
    *
    * @throws {NonceMismatchError} If the token is not bound to the supplied nonce.
-   * @throws {ClaimValidationError} If a required claim is missing, the role is unrecognised,
-   * or the token is an event token rather than an ID token.
+   * @throws {ClaimValidationError} If a required claim is missing, or the token is an event token rather than an ID token.
    * @throws {DiscoveryError} If the OIDC discovery process fails.
    */
   public async verifyIdToken(idToken: string, options: VerifyIdTokenOptions = {}): Promise<AuthenticatedUser> {
@@ -617,7 +826,7 @@ export class AuthClient {
     // An ID token never carries `evt`; the provider stamps it on purpose-built tokens like the escalation proof, which are otherwise identical - same issuer, same audience, same algorithm.
     // Without this, a step-up proof would verify here as a login, which is a much stronger claim than the one it actually makes.
     const eventType = asString(claims.evt);
-    if (eventType) throw new ClaimValidationError(`This is a "${eventType}" token, not an ID token. It asserts a single event rather than an ` + "authenticated session, so it cannot stand in for a login. Verify it with the method that matches " + `its type - \`verifyEscalationToken\` for evt: "${ESCALATION_TOKEN_TYPE}".`);
+    if (eventType) throw new ClaimValidationError(`This is a "${eventType}" token, not an ID token. It asserts a single event rather than an ` + "authenticated session, so it cannot stand in for a login. Verify it with the method that matches " + `its type - the profile's \`verifyEscalationToken\` for evt: "${ESCALATION_TOKEN_TYPE}".`);
 
     if (options.nonce !== undefined) {
       if (!timingSafeEqual(asString(claims.nonce) || "", options.nonce)) throw new NonceMismatchError();
@@ -659,7 +868,7 @@ export class AuthClient {
   public async verifyAccessToken(accessToken: string, options: VerifyAccessTokenOptions = {}): Promise<AccessTokenClaims> {
     if (!asString(accessToken)) throw new NoTokenError("No access token was provided.");
 
-    const audience = options.audience ?? this.config.apiAudience;
+    const audience = options.audience ?? this.apiAudience();
     if (!audience || (Array.isArray(audience) && audience.length === 0)) throw new ClaimValidationError("verifyAccessToken requires the audience this resource server accepts. " + "Pass `{ audience }` or set `apiAudience` on AuthConfig - the provider issues access tokens with an " + "audience shared across applications, so it cannot be defaulted safely.");
 
     const { jwks_uri } = await this.getEndpoints();
@@ -684,18 +893,23 @@ export class AuthClient {
     if (missing.length > 0) throw new ClaimValidationError(`The access token is missing required scope(s): ${missing.join(", ")}.`);
 
     const audienceClaim = typeof claims.aud === "string" ? [claims.aud] : asStringArray(claims.aud);
+    const frozen = Object.freeze({ ...claims });
+    const grants = tokenUse === "client" ? { roles: [], permissions: [] } : this.accessTokenGrants(frozen);
 
     return {
       subject,
       tokenUse,
       clientId: asString(claims.client_id),
       scopes,
+      roles: grants.roles,
+      permissions: grants.permissions,
+      sid: asString(claims.sid),
       issuer: asString(claims.iss) || "",
       audience: audienceClaim,
       issuedAt: asNumber(claims.iat),
       expiresAt,
       jwtId: asString(claims.jti),
-      claims: Object.freeze({ ...claims }),
+      claims: frozen,
     };
   }
 
@@ -757,22 +971,6 @@ export class AuthClient {
   }
 
   /**
-   * Decodes the ID token locally to get user data without a network call.
-   *
-   * @deprecated Since v2.0.0 - this method never verified the token's signature, issuer, audience or expiry, and it was the only way to reach `role`, `amr` and `session_version`.
-   * Any check built on its result can be bypassed by generating an unsigned JWT. Use {@link AuthClient.verifyIdToken} for authorization, or {@link AuthClient.decodeIdTokenUnsafe} when you knowingly want display-only claims.
-   *
-   * @param idToken The ID token obtained from a previous token exchange.
-   * @returns The unverified claims in the library's user shape.
-   * @throws {NoTokenError} If the ID token is invalid or cannot be parsed.
-   */
-  // eslint-disable-next-line @typescript-eslint/naming-convention -- frozen 1.x name
-  public parseIdToken(idToken: string): UnverifiedUser {
-    warnOnce("parseIdToken", "parseIdToken() does not verify the ID token - its signature, issuer, audience and expiry are all unchecked, " + "so `role`, `authMethods` and `sessionVersion` from it are attacker-controlled. " + "Use `await client.verifyIdToken(idToken)` for anything that gates access.");
-    return this.decodeIdTokenUnsafe(idToken);
-  }
-
-  /**
    * Timing-safe CSRF check on the callback's `state`. An empty value on either side fails.
    *
    * {@link AuthClient.handleCallback} already does this. Call it directly only when you are processing the callback yourself.
@@ -803,29 +1001,16 @@ export class AuthClient {
   }
 
   /**
-   * Checks if a JWT token is expired or about to expire.
-   *
-   * @deprecated Since v2.0.0 - renamed to {@link AuthClient.isTokenNearExpiry} because the ame read like a security check while parsing an unverified payload.
-   * Behaviour is otherwise identical, except that a token with no `exp` claim is now reported as expired instead of valid forever.
-   *
-   * @param token The JWT string.
-   * @param offsetSeconds Buffer time (default 60s) to refresh before actual expiry.
-   * @returns True when the token should be treated as expired.
-   */
-  public isTokenExpired(token: string, offsetSeconds = 60): boolean {
-    warnOnce("isTokenExpired", "isTokenExpired() is deprecated; use isTokenNearExpiry(). It is a refresh hint, not a security check - real expiry enforcement happens in verifyIdToken()/verifyAccessToken().");
-    return this.isTokenNearExpiry(token, offsetSeconds);
-  }
-
-  /**
    * Resolves the verified user behind a token response, whichever way the deployment is wired.
    *
+   * An ID token issued to this client is verified directly, with the session's access token adding its roles and permissions.
+   * A session holding only another client's tokens goes to the profile's `resolveSharedSession`, such as WilsoonID's shared platform cookie.
+   *
    * @param tokens The token response read from your session store.
-   * @param options Platform-session cache behaviour, when that branch is taken.
+   * @param options Shared-session cache behaviour, when that branch is taken.
    * @returns The verified user, safe to authorize on.
    * @throws {NoTokenError} If there is nothing usable to verify.
-   * @throws {AuthError} If the cookie belongs to a sibling service but this client is not
-   * configured for platform sessions.
+   * @throws {AuthError} If the session belongs to another client and this one cannot resolve it.
    * @throws {MachineTokenNotAllowedError} If the session holds a `client_credentials` token.
    * @throws {TokenVerificationError} If verification fails.
    */
@@ -833,14 +1018,16 @@ export class AuthClient {
     const idToken = asString(tokens?.id_token);
     const accessToken = asString(tokens?.access_token);
 
-    if (idToken && this.isAddressedToThisClient(idToken)) return this.verifyIdToken(idToken);
+    if (idToken && this.isAddressedToThisClient(idToken)) return this.withAccessTokenGrants(await this.verifyIdToken(idToken), accessToken);
 
     if (accessToken && this.looksLikeMachineToken(accessToken)) throw new MachineTokenNotAllowedError("This session holds a client_credentials token, which represents a client rather than a user, so no " + "session can be resolved from it. Verify machine callers with `verifyMachineToken`.");
 
     if (accessToken || idToken) {
-      if (accessToken && asString(this.config.apiAudience)) return this.verifyPlatformSession(accessToken, options);
+      const shared = this.profile?.resolveSharedSession;
+      // Shared sessions are resolved through introspection, which needs a pinned audience and a confidential client.
+      if (accessToken && shared && this.apiAudience() && asString(this.config.clientSecret)) return shared.call(this.profile, this.profileContext(), accessToken, options);
 
-      throw new AuthError("This session was established by another application, and this client is not configured for shared " + "platform sessions. Set `apiAudience` (and `clientSecret`) to resolve them, or give this application " + "its own session cookie.", "FOREIGN_SESSION");
+      throw new AuthError("This session was established by another application, and this client cannot resolve shared sessions. " + "That needs a profile that supports them (such as `wilsoon()`), `apiAudience` and a `clientSecret`; " + "otherwise give this application its own session cookie.", "FOREIGN_SESSION");
     }
 
     throw new NoTokenError("The session holds no tokens to verify.");
@@ -861,13 +1048,15 @@ export class AuthClient {
   }
 
   /**
-   * Decides whether verified claims describe a machine caller, honouring {@link AuthConfig.detectMachineToken}.
-   * A configured predicate replaces the built-in signals entirely, so a provider that marks machine tokens its own way is not fighting a default that disagrees.
+   * Decides whether verified claims describe a machine caller.
+   * {@link AuthConfig.detectMachineToken} wins, then the profile's `isMachineToken`, then RFC 9068's `sub === client_id`.
    */
   private classifyTokenUse(claims: Record<string, unknown>): TokenUse {
-    const detect = this.config.detectMachineToken;
+    const detect = this.config.detectMachineToken ?? this.profile?.isMachineToken?.bind(this.profile);
     if (detect) return detect(claims) ? "client" : "user";
-    return tokenUseOf(claims);
+
+    const subject = asString(claims.sub);
+    return subject !== undefined && subject === asString(claims.client_id) ? "client" : "user";
   }
 
   /** Whether a token *claims* this client's audience. A routing hint, never a trust decision. */
@@ -882,85 +1071,17 @@ export class AuthClient {
   }
 
   /**
-   * Resolves a verified session from a **platform access token** - the token that rides in the shared, domain-wide session cookie and is addressed to the platform API audience rather than to any one application.
-   * Requires `apiAudience` and a `clientSecret` (introspection is for confidential clients).
+   * Resolves a verified session from a platform access token issued to a sibling client.
    *
-   * @param accessToken The access token from the shared session.
-   * @param options Cache behaviour for this call.
-   * @returns The verified user, safe to authorize on.
-   * @throws {TokenVerificationError} If the token fails verification, or the session is no
-   * longer active (revoked, or superseded by a newer one).
-   * @throws {ClaimValidationError} If no audience is pinned, or a claim is unusable.
-   * @throws {MachineTokenNotAllowedError} If the token came from the `client_credentials` grant.
-   * @throws {AuthError} If introspection is unavailable to this client.
+   * @deprecated Since 3.0.0 - call `client.wilsoon.verifyPlatformSession()` from the `wilsoon()` profile. Removed in 4.0.
+   * @throws {AuthError} With code `PROFILE_REQUIRED` when no profile provides it.
    */
   public async verifyPlatformSession(accessToken: string, options: PlatformSessionOptions = {}): Promise<AuthenticatedUser> {
-    if (!asString(accessToken)) throw new NoTokenError("No access token was provided.");
-
-    const cacheSeconds = options.cacheSeconds ?? this.config.platformSessionCacheSeconds ?? 0;
-    if (!options.force && cacheSeconds > 0) {
-      const cached = this.readCachedSession(accessToken);
-      if (cached) return cached;
-    }
-
-    const claims = await this.verifyAccessToken(accessToken, { allowMachineTokens: true });
-    if (claims.tokenUse === "client") throw new MachineTokenNotAllowedError(`A platform session cannot be resolved from a client_credentials token: it was issued to the client ` + `"${claims.subject}" with no user behind it, so there is no identity to return. Machine callers should ` + "be authorized with `verifyMachineToken` instead of being given a session.", claims.subject);
-
-    const introspection = await this.introspectToken(accessToken);
-
-    if (!introspection.active) throw new TokenVerificationError("The platform session is no longer active: it was revoked, or superseded by a newer session.");
-    if (introspection.sub && introspection.sub !== claims.subject) throw new ClaimValidationError("The introspection response describes a different subject than the token.");
-
-    const user: AuthenticatedUser = {
-      id: claims.subject,
-      email: asString(introspection.email),
-      emailVerified: typeof introspection.email_verified === "boolean" ? introspection.email_verified : undefined,
-      name: asString(introspection.name),
-      picture: asString(introspection.picture),
-      role: this.toRole(introspection.role),
-      authMethods: asStringArray(introspection.amr),
-      sessionVersion: asNumber(introspection.session_version),
-      issuer: claims.issuer,
-      audience: claims.audience[0] ?? "",
-      source: "access_token",
-      issuedAt: claims.issuedAt,
-      expiresAt: claims.expiresAt,
-      authTime: asNumber(introspection.auth_time),
-      claims: claims.claims,
-    };
-
-    if (cacheSeconds > 0) this.cacheSession(accessToken, user, cacheSeconds);
-    return user;
-  }
-
-  private readCachedSession(token: string): AuthenticatedUser | undefined {
-    const entry = this.sessionCache.get(token);
-    if (!entry) return undefined;
-
-    if (entry.expiresAt <= Date.now()) {
-      this.sessionCache.delete(token);
-      return undefined;
-    }
-    return entry.user;
-  }
-
-  private cacheSession(token: string, user: AuthenticatedUser, cacheSeconds: number): void {
-    // Never cache past the token's own expiry
-    const expiresAt = Math.min(Date.now() + cacheSeconds * 1000, user.expiresAt * 1000);
-    if (expiresAt <= Date.now()) return;
-
-    if (this.sessionCache.size >= SESSION_CACHE_MAX_ENTRIES) {
-      const oldest = this.sessionCache.keys().next();
-      if (!oldest.done) this.sessionCache.delete(oldest.value);
-    }
-    this.sessionCache.set(token, { user, expiresAt });
+    return this.extension<(token: string, options: PlatformSessionOptions) => Promise<AuthenticatedUser>>("verifyPlatformSession")(accessToken, options);
   }
 
   /**
    * Calls the provider's RFC 7662 introspection endpoint.
-   *
-   * Answers whether the token has been revoked, and what the user's `role` and `session_version` are **right now**.
-   * It is also how a resource server that only ever sees an access token learns the role, since access tokens do not carry one.
    *
    * Requires a confidential client - the provider rejects introspection without a client secret, so never call this from a browser.
    *
@@ -995,44 +1116,31 @@ export class AuthClient {
   }
 
   /**
-   * Checks a verified identity's `session_version` against the user's current version, so that a "sign out everywhere" performed at the identity provider can be honoured before the token's own expiry.
+   * Asks the provider whether a token may still be used, and with which permissions, right now.
+   * Uses the profile's `liveAccess` when it has one, otherwise plain introspection, which answers `active` and whatever `permissions` the provider returns.
    *
-   * Resolves the live version in one of two ways:
-   * 1. {@link AuthConfig.resolveSessionVersion}, if configured - useful when your backend already knows the value, or when the client is public;
-   * 2. otherwise, introspection - pass the token you verified as `options.token`. This needs a confidential client.
+   * @throws {AuthError} If introspection is unavailable to this client.
+   */
+  public async liveAccess(token: string): Promise<LiveAccess> {
+    const hook = this.profile?.liveAccess;
+    if (hook) return hook.call(this.profile, this.profileContext(), token);
+
+    const result = await this.introspectToken(token);
+    return {
+      active: result.active,
+      ...(Array.isArray(result.permissions) ? { permissions: asStringArray(result.permissions) } : {}),
+      ...(asString(result.sid) ? { sid: asString(result.sid) } : {}),
+    };
+  }
+
+  /**
+   * Checks a verified identity's WilsoonID `session_version` against the live one.
    *
-   * It will throw an error rather than assuming the session is still current.
-   *
-   * @param options The token to introspect, when relying on introspection.
-   * @returns True when the token's session version is the current one.
-   * @throws {SessionCheckUnavailableError} If neither route is available, the token asserts no version, or the live version cannot be determined.
-   * @throws {MachineTokenNotAllowedError} If `options.token` is a machine token, which has no user and so nothing to revoke against.
+   * @deprecated Since 3.0.0 - call `client.wilsoon.isSessionCurrent()` from the `wilsoon()` profile. Removed in 4.0.
+   * @throws {AuthError} With code `PROFILE_REQUIRED` when no profile provides it.
    */
   public async isSessionCurrent(user: Pick<AuthenticatedUser, "id" | "sessionVersion">, options: { token?: string } = {}): Promise<boolean> {
-    if (!user || !asString(user.id)) throw new SessionCheckUnavailableError("A verified user with an `id` is required to check the session version.");
-    if (typeof user.sessionVersion !== "number") throw new SessionCheckUnavailableError("This token asserts no `session_version`, so revocation cannot be checked.");
-
-    const resolver = this.config.resolveSessionVersion;
-    if (resolver) {
-      const current = asNumber(await resolver(user.id));
-      if (current === undefined) throw new SessionCheckUnavailableError("`resolveSessionVersion` did not return the current session version.");
-
-      return user.sessionVersion === current;
-    }
-
-    if (options.token) {
-      if (this.looksLikeMachineToken(options.token)) throw new MachineTokenNotAllowedError("A client_credentials token has no user and therefore no `session_version` to check. Machine tokens " + "cannot be revoked at all - the grant issues no refresh token - so a short lifetime is the only " + "control. Do not gate machine callers on this check.");
-
-      const introspection = await this.introspectToken(options.token);
-      if (!introspection.active) return false;
-
-      const current = asNumber(introspection.session_version);
-      if (current === undefined) throw new SessionCheckUnavailableError("The introspection response carried no `session_version`.");
-
-      return user.sessionVersion === current;
-    }
-
-    throw new SessionCheckUnavailableError();
+    return this.extension<(user: Pick<AuthenticatedUser, "id" | "sessionVersion">, options: { token?: string }) => Promise<boolean>>("isSessionCurrent")(user, options);
   }
 
   /**
@@ -1209,223 +1317,43 @@ export class AuthClient {
   }
 
   /**
-   * Where the escalation API lives.
-   * Assumed rather than discovered - escalation is not an OIDC endpoint, so the discovery document says nothing about it. {@link AuthConfig.escalationEndpoint} overrides.
-   */
-  private escalationEndpoints(): { create: string; poll: string } {
-    const base = (asString(this.config.escalationEndpoint) || `${normalizeIssuer(this.config.issuer)}/api/escalate`).replace(/\/+$/, "");
-    return { create: base, poll: `${base}/poll` };
-  }
-
-  /**
-   * Client authentication for the escalation endpoints, which follow the token endpoint's rule: a client with a registered secret must present it, a public client need not.
-   */
-  private escalationClientAuth(): Record<string, string> {
-    const secret = asString(this.config.clientSecret);
-    return { client_id: this.config.clientId, ...(secret ? { client_secret: secret } : {}) };
-  }
-
-  /**
-   * Creates a method escalation request: asks the provider to require a stronger authentication method from a user who is already signed in.
-   * This is the back channel. It returns a URL to put in front of the user and a poll token to collect the outcome with - see {@link AuthClient.reauthorize} for the whole exchange as one call, which is what most callers want.
+   * Creates a WilsoonID method escalation request.
    *
-   * The subject must be named, and how you may name it depends on what kind of client you are: {@link CreateEscalationOptions.idTokenHint} always works and is always preferred, while {@link CreateEscalationOptions.subject} is accepted only from a confidential client.
-   * Either way the provider only lets a client demand step-up from a user it has already been issued a token for.
-   *
-   * @param options The methods to require, whether to force a fresh assertion, and the subject.
-   * @returns The created request, including the deadline the server chose.
-   * @throws {EscalationError} If the provider refuses the request - an unknown method (`invalid_use`), an unusable `id_token_hint`, or an unknown subject.
+   * @deprecated Since 3.0.0 - call `client.wilsoon.createEscalation()` from the `wilsoon()` profile. Removed in 4.0.
+   * @throws {AuthError} With code `PROFILE_REQUIRED` when no profile provides it.
    */
   public async createEscalation(options: CreateEscalationOptions): Promise<EscalationRequest> {
-    const use = Array.isArray(options.use) ? options.use.join(" ") : asString(options.use);
-    if (!use) throw new EscalationError("`use` is required: an escalation must say which methods would satisfy it.");
-
-    const idTokenHint = asString(options.idTokenHint);
-    const subject = asString(options.subject);
-    if (!idTokenHint && !subject) throw new EscalationError("An escalation must name its subject. Pass `idTokenHint` (preferred, and the only option for a public " + "client) or `subject` from a confidential client.");
-
-    const response = await fetch(this.escalationEndpoints().create, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-      body: new URLSearchParams({
-        ...this.escalationClientAuth(),
-        use,
-        force: options.force ? "true" : "false",
-        ...(idTokenHint ? { id_token_hint: idTokenHint } : {}),
-        ...(!idTokenHint && subject ? { sub: subject } : {}),
-        ...(options.expiresInSeconds !== undefined ? { expires_in: String(options.expiresInSeconds) } : {}),
-      }),
-    });
-
-    const body = await response.json().catch(() => null);
-    if (!response.ok || !isRecord(body)) {
-      const error = isRecord(body) ? asString(body.error) : undefined;
-      const description = isRecord(body) ? asString(body.error_description) : undefined;
-      throw new EscalationError(description || `The escalation request was refused (status ${response.status}).`, error);
-    }
-
-    const escalationId = asString(body.escalation_id);
-    const escalationUrl = asString(body.escalation_url);
-    const pollToken = asString(body.poll_token);
-    if (!escalationId || !escalationUrl || !pollToken) throw new EscalationError("The provider returned an escalation without an id, URL or poll token.");
-
-    return {
-      escalationId,
-      escalationUrl,
-      strategies: asStringArray(body.strategies),
-      force: body.force === true,
-      pollToken,
-      expiresIn: asNumber(body.expires_in) ?? 0,
-      expiresAt: asNumber(body.expires_at) ?? 0,
-      interval: asNumber(body.interval) ?? DEFAULT_POLL_INTERVAL_SECONDS,
-    };
+    return this.extension<(options: CreateEscalationOptions) => Promise<EscalationRequest>>("createEscalation")(options);
   }
 
   /**
-   * Polls an escalation once.
+   * Polls a WilsoonID escalation once.
    *
-   * Returns `pending` while the provider is still waiting, and throws for every terminal outcome - the user refused, or the deadline passed.
-   * Most callers want {@link AuthClient.reauthorize}, which handles the whole flow to an answer. Use this when you need to control the loop (such as an event loop that cannot block).
-   *
-   * @returns `done` with the result, or `pending` with the interval to wait.
-   * @throws {AuthorizationDeniedError} If the user refused.
-   * @throws {AuthorizationExpiredError} If the provider says the request expired.
-   * @throws {EscalationError} If the request is unknown, or the poll token does not match.
+   * @deprecated Since 3.0.0 - call `client.wilsoon.pollEscalation()` from the `wilsoon()` profile. Removed in 4.0.
+   * @throws {AuthError} With code `PROFILE_REQUIRED` when no profile provides it.
    */
   public async pollEscalation(request: Pick<EscalationRequest, "escalationId" | "pollToken" | "interval">): Promise<PollStep<EscalationResult>> {
-    const response = await fetch(this.escalationEndpoints().poll, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-      body: new URLSearchParams({
-        ...this.escalationClientAuth(),
-        escalation_id: request.escalationId,
-        poll_token: request.pollToken,
-      }),
-    });
-
-    const body = await response.json().catch(() => null);
-    if (!isRecord(body)) throw new EscalationError(`The escalation poll returned an unreadable response (status ${response.status}).`);
-
-    if (!response.ok) {
-      const error = asString(body.error) || "invalid_grant";
-      const description = asString(body.error_description) || "The escalation poll was refused.";
-
-      // The provider raises its own interval on `slow_down`, so the number in the body is authoritative - adopting it is the whole point of the signal.
-      if (error === AUTHORIZATION_PENDING || error === SLOW_DOWN) {
-        return {
-          state: "pending",
-          interval: asNumber(body.interval) ?? request.interval,
-          slowDown: error === SLOW_DOWN,
-          expiresAt: asNumber(body.expires_at),
-        };
-      }
-
-      if (error === EXPIRED_TOKEN) throw new AuthorizationExpiredError(description, asNumber(body.expires_at));
-      if (error === ACCESS_DENIED) throw new AuthorizationDeniedError(description, asString(body.reason));
-
-      throw new EscalationError(description, error);
-    }
-
-    return {
-      state: "done",
-      value: {
-        escalationId: asString(body.escalation_id) || request.escalationId,
-        alreadySatisfied: body.already_satisfied === true,
-        satisfiedBy: asString(body.satisfied_by),
-        authMethods: asStringArray(body.amr),
-        acr: asString(body.acr),
-        authTime: asNumber(body.auth_time),
-        escalationToken: asString(body.escalation_token),
-      },
-    };
+    return this.extension<(request: Pick<EscalationRequest, "escalationId" | "pollToken" | "interval">) => Promise<PollStep<EscalationResult>>>("pollEscalation")(request);
   }
 
   /**
-   * Requires a stronger authentication method from the signed-in user, and waits for the
-   * answer.
+   * Requires a stronger authentication method through WilsoonID escalation, and waits for the answer.
    *
-   * The whole exchange in one call: create the request, hand the URL to `openUrl`, poll until the provider gives a verdict, and verify the token it returns.
-   *
-   * ```ts
-   * const result = await client.reauthorize(['passkey', 'fido'], true, {
-   *   idTokenHint: tokens.id_token,
-   *   openUrl: (url) => console.log(`Confirm at: ${url}`),
-   * });
-   * if (!result.alreadySatisfied) console.log(`Verified by ${result.satisfiedBy}.`);
-   * ```
-   *
-   * With `force: false` a session that already qualifies completes on the first poll, and `openUrl` is never called.
-   *
-   * The deadline belongs to the server. This keeps polling until the provider says the request expired, rather than deciding for itself that too long has passed. Pass `maxWaitSeconds` only to bound a hung process, and `signal` to cancel.
-   *
-   * @param use The methods that would satisfy the requirement.
-   * @param force Require a fresh assertion even if the session already qualifies.
-   * @param options The subject, how to show the URL, and polling behaviour.
-   * @returns The completed escalation.
-   * @throws {AuthorizationDeniedError} If the user refused.
-   * @throws {AuthorizationExpiredError} If the request expired before it was completed.
-   * @throws {EscalationError} If the provider refuses the request, or returns a token that fails verification.
+   * @deprecated Since 3.0.0 - call `client.wilsoon.reauthorize()` from the `wilsoon()` profile, or use the portable {@link AuthClient.createStepUpRequest}. Removed in 4.0.
+   * @throws {AuthError} With code `PROFILE_REQUIRED` when no profile provides it.
    */
   public async reauthorize(use: string | string[], force = false, options: Omit<ReauthorizeOptions, "use" | "force"> = {}): Promise<EscalationResult> {
-    const request = await this.createEscalation({ ...options, use, force });
-    const first = await this.pollEscalation(request);
-
-    let result: EscalationResult;
-    if (first.state === "done") {
-      result = first.value;
-    } else {
-      await options.openUrl?.(request.escalationUrl, request);
-      result = await pollUntilResolved(() => this.pollEscalation(request), first.interval, options);
-    }
-
-    if (options.verifyToken !== false && result.escalationToken) await this.verifyEscalationToken(result.escalationToken);
-
-    return result;
+    return this.extension<(use: string | string[], force: boolean, options: Omit<ReauthorizeOptions, "use" | "force">) => Promise<EscalationResult>>("reauthorize")(use, force, options);
   }
 
   /**
-   * Verifies an escalation token against the provider's JWKS.
+   * Verifies a WilsoonID escalation token.
    *
-   * Checks the signature, issuer, audience and expiry as any token check would, and one thing besides: that `evt` is `escalation`.
-   * That claim is the only difference between this and an ID token - same issuer, same audience, same algorithm - so without the check, either would pass where the other belongs, and they authorize very different things.
-   *
-   * @param escalationToken The token from {@link EscalationResult.escalationToken}.
-   * @returns The verified outcome, safe to act on and to forward to a resource server.
-   * @throws {EscalationError} If the token is not an escalation token.
-   * @throws {TokenVerificationError} If the signature, issuer, audience or expiry fails.
+   * @deprecated Since 3.0.0 - call `client.wilsoon.verifyEscalationToken()` from the `wilsoon()` profile. Removed in 4.0.
+   * @throws {AuthError} With code `PROFILE_REQUIRED` when no profile provides it.
    */
   public async verifyEscalationToken(escalationToken: string): Promise<VerifiedEscalation> {
-    if (!asString(escalationToken)) throw new NoTokenError("No escalation token was provided.");
-
-    const { jwks_uri } = await this.getEndpoints();
-    const claims = (await verifyCompactJwt(this.keySet, escalationToken, {
-      jwksUri: jwks_uri,
-      issuer: await this.issuerCandidates(),
-      audience: this.config.clientId,
-      clockTolerance: this.clockTolerance(),
-    })) as Record<string, unknown>;
-
-    const eventType = asString(claims.evt);
-    if (eventType !== ESCALATION_TOKEN_TYPE) throw new EscalationError(`Expected an escalation token (evt: "${ESCALATION_TOKEN_TYPE}") but this one carries evt: ` + `"${eventType || "none"}". An ID token is not proof of a step-up, and refusing it here is what keeps ` + "the two from being interchangeable.");
-
-    const subject = asString(claims.sub);
-    if (!subject) throw new ClaimValidationError("The escalation token is missing the `sub` claim.");
-
-    const expiresAt = asNumber(claims.exp);
-    if (expiresAt === undefined) throw new ClaimValidationError("The escalation token is missing the `exp` claim.");
-
-    return {
-      subject,
-      satisfiedBy: asString(claims.satisfied_by),
-      alreadySatisfied: claims.already_satisfied === true,
-      authMethods: asStringArray(claims.amr),
-      acr: asString(claims.acr),
-      authTime: asNumber(claims.auth_time),
-      issuer: asString(claims.iss) || "",
-      audience: this.config.clientId,
-      expiresAt,
-      claims: Object.freeze({ ...claims }),
-    };
+    return this.extension<(token: string) => Promise<VerifiedEscalation>>("verifyEscalationToken")(escalationToken);
   }
 
   /**
@@ -1465,15 +1393,29 @@ export class AuthClient {
   }
 }
 
+/**
+ * Creates an {@link AuthClient} with the profile's extensions typed under its name, e.g. `client.wilsoon.reauthorize()`.
+ * `new AuthClient(config)` attaches the same extensions at runtime, just without the types.
+ *
+ * ```ts
+ * const client = createAuthClient({ issuer, clientId, profile: wilsoon() });
+ * await client.wilsoon.reauthorize(["passkey"]);
+ * ```
+ */
+export function createAuthClient<const P extends ProviderProfile<string, object> | undefined = undefined>(config: AuthConfig & { profile?: P }, storage?: AuthStorage): AuthClient & ProfileExtensions<P> {
+  return new AuthClient(config, storage) as AuthClient & ProfileExtensions<P>;
+}
+
 export * from "./amr";
 export * from "./challenge";
+export * from "./claims";
 export * from "./device";
 export * from "./errors";
 export * from "./escalation";
 export { ALLOWED_ALGORITHMS, decodeTokenHeaderUnsafe, decodeTokenPayloadUnsafe, splitJwt } from "./jwt";
 export * from "./machine";
 export * from "./polling";
+export * from "./profile";
 export * from "./storage";
-export * from "./storage/CookieStorage";
 export * from "./types";
 export * from "./utils";
