@@ -91,7 +91,7 @@ class RequestCookieStorage implements AuthStorage {
  * then verify, with `enforce: "live"` ask the provider whether the session still stands, and check the `roles`/`permissions`/`amr` policy if one was given. A session that cannot be verified redirects to `loginPath` and expires the cookie, so a request never proceeds on one.
  *
  * Refreshes are attempted `refreshThresholdSeconds` before expiry and, by default, only on navigations - one per page load rather than one per parallel fetch, all of them presenting the same single-use refresh token.
- * A refresh that fails while the access token is still valid is ignored.
+ * A refresh that fails while the access token is still valid is ignored. One that fails on a spent token signs out on a navigation, but only turns a fetch away, leaving the cookie for a parallel request that may have rotated it.
  *
  * Scope it with a `config.matcher` as usual - it runs on every matched request, and verification is not free even with the JWKS cached.
  *
@@ -182,7 +182,12 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions) {
         try {
           rotated = await sharedClient.refreshAccessToken(tokens.refresh_token, { persist: false });
         } catch {
-          if (spent) return signOut(loginPath);
+          // A fetch is turned away but leaves the cookie alone. It may have lost the rotation
+          // to a request beside it, whose response is writing fresh tokens to that same
+          // cookie, and expiring it here would race that write and could win. The next
+          // navigation retries with whatever the cookie holds by then, and clears it if that
+          // fails too.
+          if (spent) return isNavigation ? signOut(loginPath) : NextResponse.redirect(redirectTo(loginPath));
         }
 
         if (rotated) {

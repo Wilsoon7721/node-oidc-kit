@@ -208,16 +208,41 @@ describe('createAuthMiddleware', () => {
         expect(response.cookies.get(STORAGE_KEYS.tokens)?.value).toBe('');
     });
 
-    it('signs out when the refresh is rejected', async () => {
+    it('signs out when the refresh is rejected on a navigation', async () => {
         idp.setTokenHandler(() => ({ status: 400, body: { error: 'invalid_grant' } }));
 
-        const response = await middlewareFor()(requestWith({
+        const navigation = requestWith({
             access_token: await idp.mintAccessToken({}, { expiresInSeconds: -5 }),
             id_token: await idp.mintIdToken(),
             refresh_token: 'rt-1',
-        }));
+        });
+        navigation.headers.set('sec-fetch-mode', 'navigate');
+
+        const response = await middlewareFor({ cookieDomain: '.wilsoon.dev' })(navigation);
 
         expect(locationOf(response)?.pathname).toBe('/auth');
+        expect(response.cookies.get(STORAGE_KEYS.tokens)?.maxAge).toBe(0);
+    });
+
+    it('turns away a fetch whose refresh was rejected, without clearing the cookie', async () => {
+        /*
+          The fetch may have lost the rotation to a request beside it, whose response is writing
+          fresh tokens to the same cookie. Expiring the cookie here raced that write, and when
+          it landed last it threw away a session that had just been renewed.
+        */
+        idp.setTokenHandler(() => ({ status: 400, body: { error: 'invalid_grant' } }));
+
+        const fetched = requestWith({
+            access_token: await idp.mintAccessToken({}, { expiresInSeconds: -5 }),
+            id_token: await idp.mintIdToken(),
+            refresh_token: 'rt-1',
+        });
+        fetched.headers.set('sec-fetch-mode', 'cors');
+
+        const response = await middlewareFor({ cookieDomain: '.wilsoon.dev' })(fetched);
+
+        expect(locationOf(response)?.pathname).toBe('/auth');
+        expect(response.cookies.get(STORAGE_KEYS.tokens)).toBeUndefined();
     });
 
     it('enforces a role policy', async () => {
