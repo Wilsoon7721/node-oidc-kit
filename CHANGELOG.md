@@ -4,6 +4,20 @@ The three original packages (`@wilsoon/auth-core`, `@wilsoon/auth-react`,
 `@wilsoon/auth-next`) are versioned together. `@wilsoon/auth-machine` has no dependency on
 them and is versioned independently, starting at 0.x.
 
+## 3.0.1
+
+One fix, in the Next.js middleware.
+
+### Fixed - `@wilsoon/auth-next`
+
+- **A fetch whose refresh fails no longer clears the session cookie.** Once the access token
+  was spent, every request in a page load refreshed with the same refresh token. One won the
+  rotation and wrote fresh tokens onto its response; any that failed expired the cookie on
+  theirs, and when that deletion reached the browser last it threw away a session that had just
+  been renewed. A fetch now gets the same redirect to `loginPath` but leaves the cookie alone;
+  the next navigation retries with whatever the cookie holds by then and signs out only if that
+  fails too. ([#4](https://github.com/Wilsoon7721/node-oidc-kit/issues/4))
+
 ## 3.0.0
 
 The core is now standards-only. Everything specific to one identity provider moved behind a
