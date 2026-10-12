@@ -1,6 +1,6 @@
 {
   "name": "@wilsoon/auth-react",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "description": "React context and hooks for OpenID Connect browser sessions",
   "keywords": [
     "oidc",
@@ -57,7 +57,7 @@
     "react": "^19.2.7",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "vitest": "^1.6.1"
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=18"

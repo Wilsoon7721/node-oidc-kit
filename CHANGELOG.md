@@ -4,6 +4,22 @@ The three original packages (`@wilsoon/auth-core`, `@wilsoon/auth-react`,
 `@wilsoon/auth-next`) are versioned together. `@wilsoon/auth-machine` has no dependency on
 them and is versioned independently, starting at 0.x.
 
+## 3.0.2
+
+Maintenance. No API or behaviour changes, and no change to any runtime dependency - `jose`
+is still the only one, and `pnpm audit --prod` was already clean.
+
+### Changed - `@wilsoon/auth-core`, `@wilsoon/auth-react`, `@wilsoon/auth-next`, and `@wilsoon/auth-machine` 0.1.2
+
+- **Development dependencies repaired for security advisories.** Vitest moved to 4.1.11 in
+  every package (GHSA-82fw-gwwq-j7x9: path traversal through `@vitest/mocker`), along with
+  the build and test toolchain. These never ship in a published tarball.
+- **Linting moved to ESLint 10 and flat config** (`eslint.config.mjs`). The rules are
+  unchanged; `eslint-plugin-deprecation`, which stopped at ESLint 8, is replaced by
+  typescript-eslint's built-in `@typescript-eslint/no-deprecated`.
+- `getSession()` (`@wilsoon/auth-next`) drops a dead initial assignment flagged by the new
+  `no-useless-assignment` rule. Every path already assigned or returned before it was read.
+
 ## 3.0.1
 
 One fix, in the Next.js middleware.

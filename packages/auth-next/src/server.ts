@@ -52,7 +52,7 @@ export interface GetSessionOptions {
  * why.
  */
 export async function getSession(config: AuthConfig, options: GetSessionOptions = {}): Promise<Session> {
-    let tokens: TokenResponse | null = null;
+    let tokens: TokenResponse | null;
 
     try {
         const cookieStore = await cookies();
