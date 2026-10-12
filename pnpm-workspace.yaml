@@ -8,3 +8,16 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - '@wilsoon/docs'
   - '@wilsoon/env'
+
+overrides:
+  '@vitest/mocker@>=2.1.0 <4.1.11': ^4.1.11
+  esbuild@<=0.24.2: ^0.25.0
+  tinypool@<2.1.2: ^2.1.2
+  tinypool@<=2.1.0: ^2.1.1
+  undici@>=8.0.0 <8.10.2: ^8.10.2
+  undici@>=8.1.0 <8.10.2: ^8.10.2
+  undici@>=8.10.0 <8.10.2: ^8.10.2
+  vite@<=6.4.1: ^6.4.2
+  vite@<=6.4.2: ^6.4.3
+  vitest@<3.2.6: ^3.2.6
+  vitest@>=2.1.0 <4.1.11: ^4.1.11
