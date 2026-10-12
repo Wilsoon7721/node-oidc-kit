@@ -1,6 +1,6 @@
 {
   "name": "@wilsoon/auth-machine",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Server-only OAuth 2.0 client_credentials tokens with caching, single-flight and refresh-ahead",
   "keywords": [
     "oauth2",
@@ -45,7 +45,7 @@
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "vitest": "^1.6.1"
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=18"
