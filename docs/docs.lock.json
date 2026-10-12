@@ -27,9 +27,9 @@
       "pushedAt": "2026-10-05T18:29:29.717Z"
     },
     "getting-started/introduction": {
-      "hash": "d42e240331bae8a7f9b36cc6235f7313cbceb958772e679346df10e079efe4d0",
-      "published": "d42e240331bae8a7f9b36cc6235f7313cbceb958772e679346df10e079efe4d0",
-      "pushedAt": "2026-10-05T18:29:29.802Z"
+      "hash": "57a07ff3b57d89a8fa83db3d9e2858722f9de79a38a4b91cc55460c713b04620",
+      "published": "57a07ff3b57d89a8fa83db3d9e2858722f9de79a38a4b91cc55460c713b04620",
+      "pushedAt": "2026-10-12T20:02:59.255Z"
     },
     "getting-started/quick-start": {
       "hash": "725f386d521f064b151d4173d0463aa13e3fd4e713a55afb048f801925c73fcc",
@@ -52,49 +52,49 @@
       "pushedAt": "2026-10-05T18:29:29.518Z"
     },
     "flows/step-up": {
-      "hash": "9e727dab3f5d87d1c5fb18885a9c097911e3b273602b234a45627e332b6804d0",
-      "published": "9e727dab3f5d87d1c5fb18885a9c097911e3b273602b234a45627e332b6804d0",
-      "pushedAt": "2026-10-05T18:29:29.630Z"
+      "hash": "fa910d67c8049c9f013031f3b9310ba85d2885fabc8241aa66a9b1b0d5a1760b",
+      "published": "fa910d67c8049c9f013031f3b9310ba85d2885fabc8241aa66a9b1b0d5a1760b",
+      "pushedAt": "2026-10-12T20:02:59.115Z"
     },
     "recipes/authorization": {
-      "hash": "2b00df0d7298fab19fd506af637d8d10df792d62b642aab9a9c85845883b6e89",
-      "published": "2b00df0d7298fab19fd506af637d8d10df792d62b642aab9a9c85845883b6e89",
-      "pushedAt": "2026-10-05T18:29:29.978Z"
+      "hash": "653870a868dba90ffba06b7c2734675f8d55ce5b5156a4c546c72dc9cc47d364",
+      "published": "653870a868dba90ffba06b7c2734675f8d55ce5b5156a4c546c72dc9cc47d364",
+      "pushedAt": "2026-10-12T20:02:59.425Z"
     },
     "recipes/checklist": {
-      "hash": "566ac90e0042e5867c0ba012bced0b937ecbd38372d77940b80ac86d641be577",
-      "published": "566ac90e0042e5867c0ba012bced0b937ecbd38372d77940b80ac86d641be577",
-      "pushedAt": "2026-10-05T18:29:30.052Z"
+      "hash": "e371816ef6ae00318dbe64a627c75b531b49accb029dbfe548b97576de2a38a2",
+      "published": "e371816ef6ae00318dbe64a627c75b531b49accb029dbfe548b97576de2a38a2",
+      "pushedAt": "2026-10-12T20:03:00.571Z"
     },
     "recipes/logout": {
-      "hash": "c5bc579cbfc4e0e62de895a9b9d9a459d2dd3dab727413ec95d2f20660c121c2",
-      "published": "c5bc579cbfc4e0e62de895a9b9d9a459d2dd3dab727413ec95d2f20660c121c2",
-      "pushedAt": "2026-10-05T18:29:30.125Z"
+      "hash": "98521c0387ff0d57fadee2a0cac92ea4c9b8a7527030885df78bc9799e7114f9",
+      "published": "98521c0387ff0d57fadee2a0cac92ea4c9b8a7527030885df78bc9799e7114f9",
+      "pushedAt": "2026-10-12T20:03:03.795Z"
     },
     "recipes/nextjs": {
-      "hash": "8df990993575f02f9a795ba88bbbcc2aa403e480ce17c65725c04648cbfacc58",
-      "published": "8df990993575f02f9a795ba88bbbcc2aa403e480ce17c65725c04648cbfacc58",
-      "pushedAt": "2026-10-05T18:29:33.118Z"
+      "hash": "ca88e451b767ccc81d6fca56d96f00b6a96bb80d6abd99712839d947e7237f7c",
+      "published": "ca88e451b767ccc81d6fca56d96f00b6a96bb80d6abd99712839d947e7237f7c",
+      "pushedAt": "2026-10-12T20:03:03.903Z"
     },
     "recipes/other-frameworks": {
-      "hash": "408555ce3ddf84b853d767a3f664be82cd735696152d6789e394cb794f1850d6",
-      "published": "408555ce3ddf84b853d767a3f664be82cd735696152d6789e394cb794f1850d6",
-      "pushedAt": "2026-10-05T18:29:34.365Z"
+      "hash": "1a740fa5c078394d4b321b9736f11312ec2c46b8d954331ae300e2b89a6dbb98",
+      "published": "1a740fa5c078394d4b321b9736f11312ec2c46b8d954331ae300e2b89a6dbb98",
+      "pushedAt": "2026-10-12T20:03:04.027Z"
     },
     "recipes/react-spa": {
-      "hash": "4f362ce519b3ea05951dd5d4bed0f2500c8e542ac70d7bc264a9f064b1fd6d46",
-      "published": "4f362ce519b3ea05951dd5d4bed0f2500c8e542ac70d7bc264a9f064b1fd6d46",
-      "pushedAt": "2026-10-05T18:29:34.440Z"
+      "hash": "af7ba1f48b7238b66c166dd9781e36e08a7b615d468c7367ddf119c72740c0c7",
+      "published": "af7ba1f48b7238b66c166dd9781e36e08a7b615d468c7367ddf119c72740c0c7",
+      "pushedAt": "2026-10-12T20:03:04.250Z"
     },
     "recipes/resource-server": {
-      "hash": "fda53073c7c5b5f85e5b9a6f92b941c59c38c22429115f6ae249b0e685ebfe59",
-      "published": "fda53073c7c5b5f85e5b9a6f92b941c59c38c22429115f6ae249b0e685ebfe59",
-      "pushedAt": "2026-10-05T18:29:34.510Z"
+      "hash": "b72593a124f439ce6b073490e7bcfa654cf05346f3153918f10d0e839f854686",
+      "published": "b72593a124f439ce6b073490e7bcfa654cf05346f3153918f10d0e839f854686",
+      "pushedAt": "2026-10-12T20:03:04.590Z"
     },
     "recipes/troubleshooting": {
-      "hash": "b885068af8d4f84cbbbd293c5196d5ca3fc42311105ed3e51c010278aa6247b4",
-      "published": "b885068af8d4f84cbbbd293c5196d5ca3fc42311105ed3e51c010278aa6247b4",
-      "pushedAt": "2026-10-05T18:29:34.589Z"
+      "hash": "a86a40f580640b6f6d98095145e151f47cdf648be6dbc33b982c3150d84907d3",
+      "published": "a86a40f580640b6f6d98095145e151f47cdf648be6dbc33b982c3150d84907d3",
+      "pushedAt": "2026-10-12T20:03:05.315Z"
     }
   }
 }
