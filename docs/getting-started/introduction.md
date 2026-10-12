@@ -23,12 +23,12 @@ This grew out of running my own OIDC provider for several first-party apps. The 
 
 ## The packages
 
-| Package                 | What it's for                                                                                                      | Depends on            |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------- |
-| `@wilsoon/auth-core`    | The client: discovery, PKCE, code exchange, token verification, introspection, `amr` policies. Framework-agnostic. | `jose`                |
-| `@wilsoon/auth-react`   | `<AuthProvider>` and `useAuth()` for browser session state.                                                        | core, React ≥16       |
-| `@wilsoon/auth-next`    | `getSession()`, `requireSession()`, `createAuthMiddleware()`, `ServerCookieStorage`.                               | core, react, Next ≥14 |
-| `@wilsoon/auth-machine` | `client_credentials` tokens for server-to-server calls, with caching and single-flight. **0.x**, standalone.       | nothing               |
+| Package                                     | What it's for                                                                                                      | Depends on            |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------- |
+| {% package name="@wilsoon/auth-core" /%}    | The client: discovery, PKCE, code exchange, token verification, introspection, `amr` policies. Framework-agnostic. | `jose`                |
+| {% package name="@wilsoon/auth-react" /%}   | `<AuthProvider>` and `useAuth()` for browser session state.                                                        | core, React ≥16       |
+| {% package name="@wilsoon/auth-next" /%}    | `getSession()`, `requireSession()`, `createAuthMiddleware()`, `ServerCookieStorage`.                               | core, react, Next ≥14 |
+| {% package name="@wilsoon/auth-machine" /%} | `client_credentials` tokens for server-to-server calls, with caching and single-flight. **0.x**, standalone.       | nothing               |
 
 The first three are versioned together on a shared 3.x line. `auth-machine` has no dependency on the others and is versioned independently - see [Machine tokens](/flows/machine-tokens).
 
