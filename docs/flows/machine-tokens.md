@@ -105,4 +105,4 @@ Process memory, on purpose. The token is short-lived and cheap to re-obtain; wri
 
 ## Next
 
-[Method escalation](/flows/escalation) - back-channel step-up, and the one flow here that is a provider extension rather than a standard.
+[Method escalation](/node-oidc-kit/flows/escalation) - back-channel step-up, and the one flow here that is a provider extension rather than a standard.

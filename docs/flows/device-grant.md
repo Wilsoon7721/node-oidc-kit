@@ -49,7 +49,7 @@ No vowels, and no `0`, `O`, `1`, `I` or `L`. No vowels means no code can ever sp
 
 `interval` starts at whatever the provider advertises, and only ever goes up. A client that polls too fast gets `slow_down` - which is _not_ a failure - and the library adopts the raised interval rather than the one it started with.
 
-As with [escalation](/flows/escalation), the server owns the deadline: the loop polls until the provider reports `expired_token` instead of timing out on its own clock.
+As with [escalation](/node-oidc-kit/flows/escalation), the server owns the deadline: the loop polls until the provider reports `expired_token` instead of timing out on its own clock.
 
 ```ts
 await client.authorizeDevice({

@@ -86,7 +86,7 @@ export class AstroServerStorage implements AuthStorage {
 ```
 
 A fuller version, which keeps the transient three host-only and short-lived, is in
-[Other server frameworks](/recipes/other-frameworks).
+[Other server frameworks](/node-oidc-kit/recipes/other-frameworks).
 
 Then hand it to the client, and everything else works unchanged:
 

@@ -57,9 +57,9 @@ This costs a network call, so put it on privileged actions rather than every req
 
 A `client_credentials` token verifies like a user token, but its `sub` is a `client_id`, so
 `verifyAccessToken()` refuses it unless you opt in. See
-[Machine tokens](/flows/machine-tokens).
+[Machine tokens](/node-oidc-kit/flows/machine-tokens).
 
 ## Asking for a stronger login
 
 Answer `401` with an RFC 9470 challenge and let the client act on it. See
-[Step-up authentication](/flows/step-up).
+[Step-up authentication](/node-oidc-kit/flows/step-up).

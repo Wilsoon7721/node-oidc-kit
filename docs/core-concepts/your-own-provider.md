@@ -6,7 +6,7 @@ order: 4
 
 Since 3.0 the core is standards-only. Discovery means no endpoint URLs are hardcoded, `amr`
 policies compare plain strings, and nothing in core assumes one provider's claims or cookie
-names - see [Installation](/getting-started/installation) for the endpoints your provider
+names - see [Installation](/node-oidc-kit/getting-started/installation) for the endpoints your provider
 needs to offer. What's left is configuration, plus one constant.
 
 ## 1. Tell it where roles and permissions live
@@ -21,7 +21,7 @@ const client = new AuthClient({
 
 Without these, `roles` and `permissions` are empty and every check on them fails closed. Any
 value your provider issues is accepted; there is no fixed set. See
-[Authorization](/recipes/authorization) for the common providers.
+[Authorization](/node-oidc-kit/recipes/authorization) for the common providers.
 
 ## 2. RS256 only
 
@@ -41,7 +41,7 @@ own header.
 Core recognises a `client_credentials` token by RFC 9068's `sub` equal to `client_id`. A
 provider that marks them some other way needs `detectMachineToken` on `AuthConfig`, or a
 profile's `isMachineToken`. Returning `false` for a real machine token lets a `client_id`
-reach code written for users. See [Machine tokens](/flows/machine-tokens).
+reach code written for users. See [Machine tokens](/node-oidc-kit/flows/machine-tokens).
 
 ## 4. Anything that isn't a standard: a provider profile
 

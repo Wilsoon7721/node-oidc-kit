@@ -73,7 +73,7 @@ The provider handles the callback itself: it keeps `state`/`nonce`/verifier in
 
 {% callout type="warning" title="Client-side checks are for rendering" %}
 Anything the browser decides, a user can change. Gate data on your API with
-[a resource server](/recipes/resource-server), and use `user.verified` only to decide what to
+[a resource server](/node-oidc-kit/recipes/resource-server), and use `user.verified` only to decide what to
 show.
 {% /callout %}
 

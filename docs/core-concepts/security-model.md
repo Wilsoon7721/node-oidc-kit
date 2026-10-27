@@ -48,7 +48,7 @@ const user = await client.verifyIdToken(idToken, {
 });
 ```
 
-See [Step-up authentication](/flows/step-up) for the whole loop.
+See [Step-up authentication](/node-oidc-kit/flows/step-up) for the whole loop.
 
 ## Two tokens are not what they look like
 
@@ -62,9 +62,9 @@ Each check below exists because without it one would verify cleanly as another.
 | Machine token    | `sub === client_id`, or a profile marker | every user path, unless opted into |
 
 A **machine token**'s `sub` is a `client_id`, not a person, so `verifyAccessToken()` refuses one by default and `verifyMachineToken()` returns a type with no `id`, `roles` or `authMethods` on it to misread.
-Without a profile, core recognises one by RFC 9068's `sub` equal to `client_id`, which holds on any provider following that profile. A provider profile can add its own marker (WilsoonID's is `token_use: "client"`), and `detectMachineToken` on `AuthConfig` overrides both. `resolveSession()` and a profile's session checks refuse outright, with no opt-in - there is no user to resolve a session for. See [Machine tokens](/flows/machine-tokens).
+Without a profile, core recognises one by RFC 9068's `sub` equal to `client_id`, which holds on any provider following that profile. A provider profile can add its own marker (WilsoonID's is `token_use: "client"`), and `detectMachineToken` on `AuthConfig` overrides both. `resolveSession()` and a profile's session checks refuse outright, with no opt-in - there is no user to resolve a session for. See [Machine tokens](/node-oidc-kit/flows/machine-tokens).
 
-An **escalation token** asserts that one step-up happened, not that a user is signed in. The check runs both ways: the WilsoonID profile's `verifyEscalationToken()` requires `evt: "escalation"`, and `verifyIdToken()` refuses any token carrying an `evt`. See [Method escalation](/flows/escalation).
+An **escalation token** asserts that one step-up happened, not that a user is signed in. The check runs both ways: the WilsoonID profile's `verifyEscalationToken()` requires `evt: "escalation"`, and `verifyIdToken()` refuses any token carrying an `evt`. See [Method escalation](/node-oidc-kit/flows/escalation).
 
 ## The type system enforces it, not just the docs
 
@@ -107,7 +107,7 @@ deciding what to _show_, never what to _allow_. Gate real access on the server -
 `rolesClaim` / `permissionsClaim` or a provider profile. There is no closed set: an unknown
 role lands in `roles` and matches only a `hasRole()` check that names it. Nothing is guessed
 either - with no selector configured both lists are empty, so a check fails closed rather than
-passing on a claim nobody mapped. See [Authorization](/recipes/authorization).
+passing on a claim nobody mapped. See [Authorization](/node-oidc-kit/recipes/authorization).
 
 The deprecated `role` field, set only by the WilsoonID profile for 2.x apps, keeps its old
 `'admin' | 'user'` narrowing: any other value leaves it unset rather than mapping onto a known

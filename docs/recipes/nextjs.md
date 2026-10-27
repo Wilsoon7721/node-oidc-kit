@@ -39,8 +39,15 @@ the 2.x cookie names and adds `client.wilsoon`:
 ```ts
 import { wilsoon, WILSOON_ISSUER } from "@wilsoon/auth-provider-wilsoon";
 
-export const authConfig = { clientId, clientSecret, issuer: WILSOON_ISSUER, redirectUri, profile: wilsoon() };
+export const authConfig = {
+  clientId,
+  clientSecret,
+  issuer: WILSOON_ISSUER,
+  redirectUri,
+  profile: wilsoon(),
+};
 ```
+
 {% /callout %}
 
 ## Login and callback
@@ -54,7 +61,10 @@ import { ServerCookieStorage } from "@wilsoon/auth-next";
 import { authConfig } from "@/lib/auth-config";
 
 export async function GET() {
-  const client = new AuthClient(authConfig, new ServerCookieStorage(await cookies()));
+  const client = new AuthClient(
+    authConfig,
+    new ServerCookieStorage(await cookies()),
+  );
 
   // Persists state, nonce and the PKCE verifier as HttpOnly cookies (10 min).
   // Next.js applies those cookie writes to whatever response this handler returns.
@@ -73,7 +83,10 @@ import { ServerCookieStorage } from "@wilsoon/auth-next";
 import { authConfig } from "@/lib/auth-config";
 
 export async function GET(request: Request) {
-  const client = new AuthClient(authConfig, new ServerCookieStorage(await cookies()));
+  const client = new AuthClient(
+    authConfig,
+    new ServerCookieStorage(await cookies()),
+  );
 
   try {
     // Validates state, exchanges the code with its PKCE verifier, verifies the ID token
@@ -141,7 +154,10 @@ export default async function Page() {
 
 ```ts
 // Guard-clause style: throws AuthError with code NO_SESSION or FORBIDDEN.
-const user = await requireSession(authConfig, { permissions: ["billing.write"], amr: ["fido"] });
+const user = await requireSession(authConfig, {
+  permissions: ["billing.write"],
+  amr: ["fido"],
+});
 ```
 
 Verifying clients are cached per config, so the JWKS is fetched once per runtime instance, not
@@ -155,5 +171,5 @@ can find it.
 import { AuthProvider, useAuth } from "@wilsoon/auth-next"; // re-exported from auth-react
 ```
 
-See [React SPA](/recipes/react-spa) for the provider API. Client state is for rendering; the
+See [React SPA](/node-oidc-kit/recipes/react-spa) for the provider API. Client state is for rendering; the
 server helpers above are what gate access.

@@ -6,7 +6,7 @@ order: 3
 
 Two shapes of session are supported, and which one you're in decides which methods you
 call. A third case - a caller with no session at all - is covered in
-[Machine tokens](/flows/machine-tokens).
+[Machine tokens](/node-oidc-kit/flows/machine-tokens).
 
 ## Per-application session - standard OIDC
 

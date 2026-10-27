@@ -42,8 +42,9 @@ if (!satisfiesAmr(user, [AMR.FIDO])) {
     buildAuthenticationChallenge({
       acrValues: "urn:wilsoon:acr:passkey",
       maxAge: 300,
-      errorDescription: "A recent passkey assertion is required to change payout details.",
-    })
+      errorDescription:
+        "A recent passkey assertion is required to change payout details.",
+    }),
   );
   return res.status(401).end();
 }
@@ -55,12 +56,17 @@ heard of your service can act on it.
 ## The client's half
 
 ```ts
-import { readAuthenticationChallenge, isStepUpChallenge } from "@wilsoon/auth-core";
+import {
+  readAuthenticationChallenge,
+  isStepUpChallenge,
+} from "@wilsoon/auth-core";
 
 const res = await fetch("/api/payouts", { method: "POST", body });
 
 if (res.status === 401) {
-  const challenge = readAuthenticationChallenge(res.headers.get("www-authenticate"));
+  const challenge = readAuthenticationChallenge(
+    res.headers.get("www-authenticate"),
+  );
 
   if (isStepUpChallenge(challenge)) {
     const { url } = await client.createStepUpRequest(challenge);
@@ -71,12 +77,12 @@ if (res.status === 401) {
 ```
 
 `isStepUpChallenge()` earns its place: a `401` carrying `insufficient_user_authentication`
-means the token is valid and the user *is* signed in, they simply have not proved enough.
+means the token is valid and the user _is_ signed in, they simply have not proved enough.
 Sending them through a plain login throws away a good session for no reason.
 
 {% callout type="warning" title="Only acr_values and max_age cross over" %}
 `createStepUpRequest()` carries those two and nothing else. A challenge arrives from a
-resource server over the network, and those two can only ever ask for *stronger*
+resource server over the network, and those two can only ever ask for _stronger_
 authentication - whereas a `scope` taken from the same header would let that server widen
 what your client requests on the user's behalf.
 
@@ -92,7 +98,7 @@ asked for but never silently accept less.
 Seconds. `max_age: 0` demands a fresh authentication outright.
 
 ```ts
-await client.createAuthorizeUrl({ maxAge: 0 });   // authenticate again, now
+await client.createAuthorizeUrl({ maxAge: 0 }); // authenticate again, now
 await client.createAuthorizeUrl({ maxAge: 300 }); // within the last five minutes is fine
 ```
 
@@ -103,6 +109,7 @@ makes the check on the way back possible.
 
 An authorization server is free to ignore `acr_values` and `max_age`. One that does returns a
 **completely valid token** - correct signature, correct issuer, correct audience, not expired
+
 - describing a weaker authentication than you asked for. Nothing about it looks wrong.
 
 So the demand and the check are two separate jobs, and only the second one protects you:
@@ -125,11 +132,11 @@ not happen is the `acr` claim you did not read.
 
 ## What your provider needs
 
-| Requirement | Effect if missing |
-| --- | --- |
-| Honours `acr_values` on `/authorize` | `requiredAcr` rejects the token; the user loops |
-| Honours `max_age`, and returns `auth_time` | `maxAuthAgeSeconds` rejects the token |
-| Advertises `acr_values_supported` | Nothing breaks; you have to know the values yourself |
+| Requirement                                | Effect if missing                                    |
+| ------------------------------------------ | ---------------------------------------------------- |
+| Honours `acr_values` on `/authorize`       | `requiredAcr` rejects the token; the user loops      |
+| Honours `max_age`, and returns `auth_time` | `maxAuthAgeSeconds` rejects the token                |
+| Advertises `acr_values_supported`          | Nothing breaks; you have to know the values yourself |
 
 WilsoonID does all three, and refuses an unsatisfiable request with
 `unmet_authentication_requirements` rather than issuing a code that would fail your check
@@ -137,18 +144,18 @@ anyway.
 
 ## When to reach for escalation instead
 
-[Method escalation](/flows/escalation) solves the same problem through a back channel, and is
+[Method escalation](/node-oidc-kit/flows/escalation) solves the same problem through a back channel, and is
 better in two specific cases - but it is a provider extension rather than a standard, so it
 only works against WilsoonID, through its provider profile.
 
-| | Step-up (this page) | [Escalation](/flows/escalation) |
-| --- | --- | --- |
-| Basis | OIDC Core + RFC 9470 | Provider extension |
-| Works against | Any conforming provider | WilsoonID only (`profile: wilsoon()`) |
-| Mechanism | Redirect through `/authorize` | Back channel, then poll |
-| Suits a CLI | No - needs a redirect URI | Yes |
-| "Already satisfied" without prompting | No | Yes |
-| Proof for a third party | The ID token's `acr` | A dedicated escalation token |
+|                                       | Step-up (this page)           | [Escalation](/node-oidc-kit/flows/escalation) |
+| ------------------------------------- | ----------------------------- | --------------------------------------------- |
+| Basis                                 | OIDC Core + RFC 9470          | Provider extension                            |
+| Works against                         | Any conforming provider       | WilsoonID only (`profile: wilsoon()`)         |
+| Mechanism                             | Redirect through `/authorize` | Back channel, then poll                       |
+| Suits a CLI                           | No - needs a redirect URI     | Yes                                           |
+| "Already satisfied" without prompting | No                            | Yes                                           |
+| Proof for a third party               | The ID token's `acr`          | A dedicated escalation token                  |
 
 Reach for step-up by default. Reach for escalation when you need a client with no redirect
 URI to demand one, or when you want to ask without putting a screen in front of a user who
@@ -156,4 +163,4 @@ already qualifies.
 
 ## Next
 
-[The device grant](/flows/device-grant) - signing in a client that has no browser at all.
+[The device grant](/node-oidc-kit/flows/device-grant) - signing in a client that has no browser at all.

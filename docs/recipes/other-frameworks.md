@@ -5,7 +5,7 @@ order: 3
 ---
 
 Astro, Express, Hono, SvelteKit or anything else with request cookies. Implement
-[`AuthStorage`](/core-concepts/storage) over your framework's cookies once, and the core
+[`AuthStorage`](/node-oidc-kit/core-concepts/storage) over your framework's cookies once, and the core
 client does the rest.
 
 ## The pattern

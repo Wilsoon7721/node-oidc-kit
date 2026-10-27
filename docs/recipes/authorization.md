@@ -80,5 +80,5 @@ await client.verifyIdToken(idToken, { maxAuthAgeSeconds: 300 });
 ```
 
 To ask for a stronger or fresher login rather than just refusing a weak one, use
-[Step-up authentication](/flows/step-up), which works against any provider. On WilsoonID,
-[Escalation](/flows/escalation) proves one extra factor without a new login.
+[Step-up authentication](/node-oidc-kit/flows/step-up), which works against any provider. On WilsoonID,
+[Escalation](/node-oidc-kit/flows/escalation) proves one extra factor without a new login.

@@ -7,7 +7,11 @@ order: 1
 **node-oidc-kit** is a framework-agnostic OpenID Connect _relying party_ for TypeScript - the client half of OIDC, not the provider. Point it at any conforming issuer, get back a verified user, and stop hand-rolling PKCE.
 
 ```js
-const client = new AuthClient({ clientId, issuer: "https://id.example.com", redirectUri });
+const client = new AuthClient({
+  clientId,
+  issuer: "https://id.example.com",
+  redirectUri,
+});
 
 const { url } = await client.createAuthorizeUrl(); // PKCE + state + nonce, persisted
 // ...redirect, and on the way back:
@@ -30,14 +34,14 @@ This grew out of running my own OIDC provider for several first-party apps. The 
 | {% package name="@wilsoon/auth-next" /%}    | `getSession()`, `requireSession()`, `createAuthMiddleware()`, `ServerCookieStorage`.                               | core, react, Next ≥14 |
 | {% package name="@wilsoon/auth-machine" /%} | `client_credentials` tokens for server-to-server calls, with caching and single-flight. **0.x**, standalone.       | nothing               |
 
-The first three are versioned together on a shared 3.x line. `auth-machine` has no dependency on the others and is versioned independently - see [Machine tokens](/flows/machine-tokens).
+The first three are versioned together on a shared 3.x line. `auth-machine` has no dependency on the others and is versioned independently - see [Machine tokens](/node-oidc-kit/flows/machine-tokens).
 
-Using anything else - Astro, SvelteKit, Hono, Express? Use `@wilsoon/auth-core` directly and write one storage adapter. See [Storage](/core-concepts/storage) - that's the entire
+Using anything else - Astro, SvelteKit, Hono, Express? Use `@wilsoon/auth-core` directly and write one storage adapter. See [Storage](/node-oidc-kit/core-concepts/storage) - that's the entire
 integration.
 
 ## One rule, everywhere
 
-Only three core methods produce a value you may authorize on: `verifyIdToken()`, `verifyAccessToken()` and `verifyMachineToken()`, plus `handleCallback()` and `resolveSession()`, which wrap them. A provider profile can add its own, such as WilsoonID's `verifyPlatformSession()` and `verifyEscalationToken()`. Every method whose name ends in `Unsafe`, plus the userinfo-backed `getUser()`, returns something you can render but never gate access with. [Security model](/core-concepts/security-model) covers why, and how the type system enforces it.
+Only three core methods produce a value you may authorize on: `verifyIdToken()`, `verifyAccessToken()` and `verifyMachineToken()`, plus `handleCallback()` and `resolveSession()`, which wrap them. A provider profile can add its own, such as WilsoonID's `verifyPlatformSession()` and `verifyEscalationToken()`. Every method whose name ends in `Unsafe`, plus the userinfo-backed `getUser()`, returns something you can render but never gate access with. [Security model](/node-oidc-kit/core-concepts/security-model) covers why, and how the type system enforces it.
 
 {% aside title="Not a provider" %}
 This is the _client_ half of OIDC. It doesn't run an authorization server, issue tokens, or store users - it talks to one you (or someone else) already runs.
@@ -45,7 +49,7 @@ This is the _client_ half of OIDC. It doesn't run an authorization server, issue
 
 ## Next
 
-- [Installation](/getting-started/installation) - requirements and package choice
-- [Quick start](/getting-started/quick-start) - a working login flow in a few lines
-- [Flows](/flows/step-up) - step-up, the device grant, and machine-to-machine tokens
-- [Recipes](/recipes/nextjs) - end-to-end wiring for Next.js, React, other frameworks and APIs
+- [Installation](/node-oidc-kit/getting-started/installation) - requirements and package choice
+- [Quick start](/node-oidc-kit/getting-started/quick-start) - a working login flow in a few lines
+- [Flows](/node-oidc-kit/flows/step-up) - step-up, the device grant, and machine-to-machine tokens
+- [Recipes](/node-oidc-kit/recipes/nextjs) - end-to-end wiring for Next.js, React, other frameworks and APIs

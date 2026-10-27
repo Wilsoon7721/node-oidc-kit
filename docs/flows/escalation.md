@@ -13,7 +13,7 @@ is not part of OIDC or any RFC, it is not discoverable, and Okta, Auth0 or Keycl
 endpoint for it.
 
 For step-up that works against any conforming provider, use
-[step-up authentication](/flows/step-up) - `acr_values` and `max_age` on an ordinary
+[step-up authentication](/node-oidc-kit/flows/step-up) - `acr_values` and `max_age` on an ordinary
 authorization request. Come back here when you need what that cannot do: a client with no
 redirect URI demanding step-up, or asking without showing anything to a user who already
 qualifies.
@@ -160,7 +160,9 @@ It exists so the outcome can be handed to a resource server that trusts the prov
 but not you. A boolean returned by your own code proves nothing to anybody else.
 
 ```ts
-const proof = await client.wilsoon.verifyEscalationToken(result.escalationToken!);
+const proof = await client.wilsoon.verifyEscalationToken(
+  result.escalationToken!,
+);
 // proof.satisfiedBy === "passkey"
 ```
 
